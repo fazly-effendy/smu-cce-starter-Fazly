@@ -9,9 +9,10 @@ search for it and reopen it exactly as it was.
 Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 
 > **Status (v0.9.0).** Features 1–5 work end to end in GitHub Codespaces
-> (SQLite and local files). On AWS, Stage 1 (VPC + EC2 via CloudFormation) has
-> been deployed in the Sandbox; Stage 2 adds Amazon RDS for MySQL and is ready
-> for its Sandbox run. Auto scaling (Feature 6) follows the Week 9 lesson; see
+> (SQLite and local files) and on AWS: CloudFormation creates the VPC, EC2 app
+> server and Amazon RDS for MySQL, and an independent audit on 25 Oct 2026
+> confirmed generate → compare → note → save → search → reopen against RDS.
+> Auto scaling (Feature 6) follows the Week 9 lesson; see
 > [Project status](#project-status) and [Known limitations](#known-limitations).
 
 ---
@@ -108,7 +109,7 @@ criteria are from the Lesson 5 slides.
 | 2 | Company comparison | Two or more companies; revenue and net-income growth, net margin, return on assets, debt-to-assets, P/E, market cap; rebased share-price chart and holding-period return | ✅ Working locally |
 | 3 | Storage: save analysis | Complete briefing saved as a Markdown file (plus JSON snapshot) in `analyses-data/`; listed and reopened without re-downloading | ✅ Working locally; on EC2 the folder is on the instance's EBS volume |
 | 4 | Storage: RM notes | Structured meeting note saved with, and linked to, its briefing | ✅ Working locally |
-| 5 | Database search | Metadata in SQL tables; search by ticker, date range, client reference, analysis type; open the matching briefing | ✅ Working with SQLite; tests also pass on MySQL-compatible MariaDB. ⏳ RDS template ready, Sandbox run pending |
+| 5 | Database search | Metadata in SQL tables; search by ticker, date range, client reference, analysis type; open the matching briefing | ✅ Working on Amazon RDS for MySQL in the Sandbox (verified 25 Oct 2026); SQLite locally |
 | 6 | Scaling | Automatically add and remove capacity | ⏳ Not started (taught in Week 9) |
 
 | Marking area | Where to look |
@@ -181,6 +182,7 @@ then reads its JSON snapshot. Reopening never contacts Yahoo.
 ├── docs/aws-deployment.md        # step-by-step AWS deployment and evidence checklist
 ├── lessons/                      # course lesson notes
 ├── requirements.txt              # app dependencies
+├── requirements-lock.txt         # exact versions installed on EC2 (Python 3.9)
 ├── requirements-dev.txt          # + pytest
 ├── .streamlit/config.toml        # dark theme, one accent colour (#2563EB)
 ├── .env.example                  # configuration variable names (no secrets)
@@ -365,7 +367,7 @@ In short:
 | Stage | What it adds | Status |
 |---|---|---|
 | 1 | VPC with public and private subnets, security group, EC2 installed by user data and run as a systemd service | ✅ Deployed in the Sandbox (`CREATE_COMPLETE`, app reachable) |
-| 2 | Amazon RDS for MySQL in the private subnets, reachable only from the app server | Template ready (cfn-lint clean); Sandbox run pending |
+| 2 | Amazon RDS for MySQL in the private subnets, reachable only from the app server | ✅ Deployed and verified in the Sandbox (25 Oct 2026); reboot test pending |
 | 3 | Scaling (Week 9 lesson) | Not started |
 
 `scripts/lesson5.yaml` and `scripts/lesson5-nimbus.yaml` are the course's

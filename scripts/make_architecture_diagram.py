@@ -295,7 +295,7 @@ lock(486, fy - 9, "#1F4FB8")
 text(506, fy + 5, "security group rule (inbound)", size=13.5, fill="#334155")
 add(f'<rect x="726" y="{fy - 9}" width="18" height="18" rx="4" fill="#F8FAFC" stroke="#94A3B8" stroke-dasharray="4 3"/>')
 text(752, fy + 5, "not used yet", size=13.5, fill="#334155")
-text(W - 40, fy + 5, "Status: Stage 1 (VPC + EC2) deployed · Stage 2 (RDS) deploying · Stage 3 (scaling) after Week 9",
+text(W - 40, fy + 5, "Status: Stages 1–2 (VPC, EC2, RDS) deployed and verified 25 Oct 2026 · Stage 3 (scaling) after Week 9",
      size=13.5, fill="#475569", anchor="end")
 text(56, fy + 34, "No NAT gateway: the database needs no internet access. Passwords are CloudFormation NoEcho parameters, never stored in the repository.",
      size=12.5, fill="#64748B")

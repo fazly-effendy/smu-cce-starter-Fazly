@@ -8,7 +8,7 @@ The deployment is built in stages. Each stage is the same template, extended:
 | Stage | Adds | Status |
 |---|---|---|
 | 1 | VPC (2 public + 2 private subnets), security group, EC2 app server installed by user data, systemd service, health-checked `CREATE_COMPLETE` | ✅ Deployed in the Sandbox |
-| 2 | Amazon RDS for MySQL in the private subnets; database security group that accepts MySQL only from the app server; app connected to RDS | Template ready; Sandbox run pending |
+| 2 | Amazon RDS for MySQL in the private subnets; database security group that accepts MySQL only from the app server; app connected to RDS | ✅ Deployed and verified (25 Oct 2026); reboot test pending |
 | 3 | Scaling, per the Week 9 lesson | After Week 9 |
 
 ## Architecture (Stage 2)
@@ -47,7 +47,7 @@ flowchart LR
 | Database security group | `nimbus-db-sg` | Port 3306 **only from `nimbus-app-sg`**; nothing else can connect |
 | DB subnet group | `nimbus-db-subnets` | Places RDS in the two private subnets (RDS requires two AZs) |
 | RDS for MySQL (db.t3.micro, 20 GB) | `nimbus-db` | Metadata database `nimbus`: tables `briefings`, `briefing_tickers`, `rm_notes`. **Not publicly accessible** |
-| EC2 instance (t2.micro, Amazon Linux 2023) | `nimbus-app` | Clones the repo, installs `requirements.txt` in a venv, connects to RDS, runs Nimbus as the `nimbus` systemd service |
+| EC2 instance (t2.micro, Amazon Linux 2023) | `nimbus-app` | Clones the repo, installs the exact versions in `requirements-lock.txt` in a venv, connects to RDS, runs Nimbus as the `nimbus` systemd service |
 
 **How "complete" is decided:** CloudFormation creates RDS first, because the
 EC2 user data needs its endpoint. The instance then installs Nimbus, runs
@@ -63,6 +63,24 @@ It is a `NoEcho` parameter, so CloudFormation shows `****`. User data writes it
 into `/etc/nimbus.env` (readable by root only, read by systemd) with logging
 switched off, so it does not appear in the setup log or the system log. Nimbus
 only ever displays the database host, never the URL with the password.
+
+## Verified on 25 Oct 2026
+
+An independent audit of the deployed stack (no changes made) confirmed:
+
+- the stack reached `CREATE_COMPLETE` (02:02:46 SGT), and `AppServer` received the SUCCESS signal;
+- EC2 t2.micro on Amazon Linux 2023, in the public subnet, 2/2 status checks;
+  inbound 8501 from anywhere, SSH limited to 127.0.0.1/32;
+- RDS `nimbus-db` (MySQL Community, db.t3.micro) *Available*, internet access
+  disabled, and its security group accepts traffic only from the app server's
+  security group;
+- the History tab reports `mysql+pymysql` at the `nimbus-db` endpoint, and
+  generate, compare, note, save, search by ticker, reopen and the invalid-ticker
+  case all passed. Row counts rose by exactly one briefing per save.
+
+Still to run: the reboot test (evidence item 6). The Sandbox also shows a
+*Bastion Host* and a *Lab Instance*; they belong to the AWS Academy lab
+environment, not to this stack.
 
 ## Stage 2: deploy
 
@@ -89,7 +107,9 @@ Crop out the account ID in every screenshot. Never screenshot the Parameters
 tab with a visible password (it shows `****`, which is fine).
 
 1. **Stack → Events:** `NimbusDatabase` `CREATE_COMPLETE`, and `AppServer`
-   with status reason *Nimbus is running on port 8501 and connected to RDS*.
+   with status reason *Nimbus (commit …) is running on port 8501 and connected
+   to RDS*. The commit is also shown at the bottom of the app's sidebar, so you
+   can prove exactly which code is deployed.
    Then the stack at `CREATE_COMPLETE`.
 2. **Stack → Outputs:** `NimbusUrl` and `DatabaseEndpoint`.
 3. **RDS → Databases → nimbus-db → Connectivity & security:**

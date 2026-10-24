@@ -290,10 +290,14 @@ Resources:
           APP_DIR=/home/ec2-user/nimbus
           git clone --depth 1 --branch "${GitBranch}" "${GitHubRepoUrl}" "$APP_DIR"
 
-          # 3. Install dependencies in a virtual environment
+          # 3. Install dependencies in a virtual environment: exact versions from
+          #    requirements-lock.txt, so every deployment gets the same packages
           python3 -m venv "$APP_DIR/.venv"
           "$APP_DIR/.venv/bin/python" -m pip install --upgrade pip
-          "$APP_DIR/.venv/bin/python" -m pip install -r "$APP_DIR/requirements.txt"
+          REQS="$APP_DIR/requirements-lock.txt"
+          [ -f "$REQS" ] || REQS="$APP_DIR/requirements.txt"
+          "$APP_DIR/.venv/bin/python" -m pip install -r "$REQS"
+          COMMIT=$(git -C "$APP_DIR" rev-parse --short HEAD)
           mkdir -p "$APP_DIR/analyses-data"
           chown -R ec2-user:ec2-user "$APP_DIR"
 
@@ -304,6 +308,7 @@ Resources:
           umask 077
           cat > /etc/nimbus.env <<EOF
           NIMBUS_DATA_DIR=$APP_DIR/analyses-data
+          NIMBUS_COMMIT=$COMMIT
           NIMBUS_DATABASE_URL=mysql+pymysql://${DBUsername}:${DBPassword}@${NimbusDatabase.Endpoint.Address}:${NimbusDatabase.Endpoint.Port}/nimbus?charset=utf8mb4
           EOF
           umask 022
@@ -337,7 +342,7 @@ Resources:
           # 7. Wait until the app answers, then tell CloudFormation it worked
           for _ in $(seq 1 60); do
             if curl -sf http://127.0.0.1:8501/_stcore/health; then
-              signal 0 "Nimbus is running on port 8501 and connected to RDS"
+              signal 0 "Nimbus (commit $COMMIT) is running on port 8501 and connected to RDS"
               exit 0
             fi
             sleep 5

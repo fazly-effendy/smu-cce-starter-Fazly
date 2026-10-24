@@ -87,6 +87,11 @@ def to_local(moment: datetime) -> datetime:
     return moment.astimezone(display_timezone())
 
 
+def deployed_commit() -> Optional[str]:
+    """Git commit the server was deployed from (set by EC2 user data), if known."""
+    return os.environ.get("NIMBUS_COMMIT") or None
+
+
 def describe_database_url(url: str) -> str:
     """Database location safe to show in the UI: never includes a password."""
     if url.startswith("sqlite"):

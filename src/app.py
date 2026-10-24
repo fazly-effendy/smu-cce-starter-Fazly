@@ -37,6 +37,7 @@ from config import (
     CACHE_TTL_SECONDS,
     DEFAULT_PERIOD_LABEL,
     database_url,
+    deployed_commit,
     describe_database_url,
     timezone_label,
     to_local,
@@ -500,7 +501,8 @@ def sidebar() -> None:
                 "- Saved briefings are snapshots and are never refreshed\n"
                 "- Figures are historical, not forecasts or advice"
             )
-        st.caption(f"Nimbus {APP_VERSION}")
+        commit = deployed_commit()
+        st.caption(f"Nimbus {APP_VERSION}" + (f" · commit {commit}" if commit else ""))
 
 
 def company_picker() -> None:
