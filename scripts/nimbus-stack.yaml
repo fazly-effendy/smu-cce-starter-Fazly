@@ -1,0 +1,266 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Nimbus (DS600) - Stage 1. A VPC with public and private subnets in two
+  Availability Zones and one EC2 instance that clones Nimbus from GitHub,
+  installs it with EC2 user data and runs it as a service on port 8501.
+  The private subnets are created now so Stage 2 can place Amazon RDS in them.
+  Region: us-east-1 (AWS Academy Sandbox).
+
+# ---------------------------------------------------------------------------
+# Parameters: values chosen when the stack is created
+# ---------------------------------------------------------------------------
+Parameters:
+  GitHubRepoUrl:
+    Type: String
+    Default: https://github.com/fazly-effendy/smu-cce-starter-Fazly.git
+    Description: Public Git repository that holds Nimbus.
+  GitBranch:
+    Type: String
+    Default: main
+    Description: Branch to deploy (e.g. feature/unified-nimbus-prototype before it is merged).
+  ImageId:
+    Type: AWS::EC2::Image::Id
+    Default: ami-0fef201115eefe936
+    Description: Amazon Linux 2023 AMI used in Lessons 6 and 7 (us-east-1).
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues: [t2.micro, t3.micro, t3.small]
+    Description: EC2 instance size.
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: vockey
+    Description: Existing key pair (the Sandbox provides vockey).
+  AllowedWebCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: Who may open Nimbus on port 8501. 0.0.0.0/0 = anyone (needed for a class demo).
+  AllowedSshCidr:
+    Type: String
+    Default: 127.0.0.1/32
+    Description: >
+      Who may SSH to the instance. Closed by default (127.0.0.1/32); use the EC2 system log for
+      troubleshooting, or set this to your own IP followed by /32 if you need SSH.
+
+Resources:
+  # -------------------------------------------------------------------------
+  # Network: VPC, internet gateway, two public and two private subnets
+  # (same address plan as Lab 2: 10.0.0.0/24 and 10.0.2.0/24 public,
+  # 10.0.1.0/24 and 10.0.3.0/24 private)
+  # -------------------------------------------------------------------------
+  NimbusVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{Key: Name, Value: nimbus-vpc}]
+
+  NimbusInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{Key: Name, Value: nimbus-igw}]
+
+  NimbusGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref NimbusVpc
+      InternetGatewayId: !Ref NimbusInternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref NimbusVpc
+      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{Key: Name, Value: nimbus-public-a}]
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref NimbusVpc
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{Key: Name, Value: nimbus-public-b}]
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref NimbusVpc
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{Key: Name, Value: nimbus-private-a}]
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref NimbusVpc
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{Key: Name, Value: nimbus-private-b}]
+
+  # Public route table: internet traffic goes to the internet gateway.
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref NimbusVpc
+      Tags: [{Key: Name, Value: nimbus-rtb-public}]
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: NimbusGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref NimbusInternetGateway
+
+  PublicSubnetARouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  # Private route table: no route to the internet at all. The database (Stage 2)
+  # only needs to be reached from inside the VPC, so no NAT gateway is created.
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref NimbusVpc
+      Tags: [{Key: Name, Value: nimbus-rtb-private}]
+
+  PrivateSubnetARouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetBRouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTable
+
+  # -------------------------------------------------------------------------
+  # Security group for the application server
+  # -------------------------------------------------------------------------
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Nimbus web app - Streamlit on 8501; SSH closed unless AllowedSshCidr is set
+      VpcId: !Ref NimbusVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8501
+          ToPort: 8501
+          CidrIp: !Ref AllowedWebCidr
+          Description: Nimbus in the browser
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSshCidr
+          Description: SSH (closed by default)
+      Tags: [{Key: Name, Value: nimbus-app-sg}]
+
+  # -------------------------------------------------------------------------
+  # Application server. User data installs Nimbus and starts it as a systemd
+  # service (restarts automatically and survives reboots). The stack only
+  # reports CREATE_COMPLETE after the app answers its health check, via
+  # cfn-signal and the CreationPolicy below.
+  # -------------------------------------------------------------------------
+  AppServer:
+    Type: AWS::EC2::Instance
+    DependsOn: PublicDefaultRoute
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT20M
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnetA
+      SecurityGroupIds: [!Ref AppSecurityGroup]
+      Tags: [{Key: Name, Value: nimbus-app}]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          exec > >(tee -a /var/log/nimbus-setup.log) 2>&1
+
+          signal() {
+            /opt/aws/bin/cfn-signal -e "$1" --reason "$2" \
+              --stack ${AWS::StackName} --resource AppServer --region ${AWS::Region} || true
+          }
+          trap 'signal 1 "Nimbus setup failed: see /var/log/nimbus-setup.log or the EC2 system log"' ERR
+
+          # 1. System packages (Python 3.9 ships with Amazon Linux 2023)
+          dnf install -y git python3-pip aws-cfn-bootstrap
+
+          # 2. Get the application from GitHub
+          APP_DIR=/home/ec2-user/nimbus
+          git clone --depth 1 --branch "${GitBranch}" "${GitHubRepoUrl}" "$APP_DIR"
+
+          # 3. Install dependencies in a virtual environment
+          python3 -m venv "$APP_DIR/.venv"
+          "$APP_DIR/.venv/bin/python" -m pip install --upgrade pip
+          "$APP_DIR/.venv/bin/python" -m pip install -r "$APP_DIR/requirements.txt"
+          mkdir -p "$APP_DIR/analyses-data"
+          chown -R ec2-user:ec2-user "$APP_DIR"
+
+          # 4. Run Nimbus as a service on port 8501
+          cat > /etc/systemd/system/nimbus.service <<EOF
+          [Unit]
+          Description=Nimbus Streamlit app
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          User=ec2-user
+          WorkingDirectory=$APP_DIR
+          Environment=NIMBUS_DATA_DIR=$APP_DIR/analyses-data
+          ExecStart=$APP_DIR/.venv/bin/python -m streamlit run src/app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          systemctl daemon-reload
+          systemctl enable --now nimbus
+
+          # 5. Wait until the app answers, then tell CloudFormation it worked
+          for _ in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8501/_stcore/health; then
+              signal 0 "Nimbus is running on port 8501"
+              exit 0
+            fi
+            sleep 5
+          done
+          signal 1 "Nimbus did not answer its health check within 5 minutes: run 'journalctl -u nimbus'"
+
+Outputs:
+  NimbusUrl:
+    Description: Open this in a browser (http, not https)
+    Value: !Sub http://${AppServer.PublicDnsName}:8501
+  PublicIp:
+    Description: Public IP address of the app server
+    Value: !GetAtt AppServer.PublicIp
+  InstanceId:
+    Description: App server instance (EC2 > Instances)
+    Value: !Ref AppServer
+  VpcId:
+    Description: VPC for Nimbus
+    Value: !Ref NimbusVpc
+  PrivateSubnets:
+    Description: Private subnets (used by RDS in Stage 2)
+    Value: !Join [",", [!Ref PrivateSubnetA, !Ref PrivateSubnetB]]

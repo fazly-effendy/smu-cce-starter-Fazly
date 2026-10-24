@@ -175,7 +175,8 @@ then reads its JSON snapshot. Reopening never contacts Yahoo.
 │       └── briefing_store.py     # save once / reopen, keeping files and DB in step
 ├── tests/                        # pytest: calculations, parsing, storage, full UI workflow
 ├── notebooks/                    # original notebooks (unchanged)
-├── scripts/                      # CloudFormation templates (Lessons 6–7), debug_news.py
+├── scripts/                      # nimbus-stack.yaml (deployment), lesson templates, debug_news.py
+├── docs/aws-deployment.md        # step-by-step AWS deployment and evidence checklist
 ├── lessons/                      # course lesson notes
 ├── requirements.txt              # app dependencies
 ├── requirements-dev.txt          # + pytest
@@ -326,29 +327,25 @@ many articles Nimbus could read.
 
 ## Deploying to AWS
 
-`scripts/lesson5-nimbus.yaml` is the Lesson 7 CloudFormation template. It
-creates a VPC, public subnet, internet gateway, security group and an EC2
-instance whose user data clones this repository, installs
-`requirements.txt` and runs `src/app.py` on port 8501.
+Nimbus is deployed with CloudFormation from [`scripts/nimbus-stack.yaml`](scripts/nimbus-stack.yaml).
+Full steps, evidence checklist, troubleshooting and clean-up are in
+[`docs/aws-deployment.md`](docs/aws-deployment.md).
 
-1. Push your changes to GitHub. EC2 clones from GitHub, not from Codespaces.
-2. In the AWS Sandbox open **CloudFormation → Create stack → Upload a
-   template file**, and choose `scripts/lesson5-nimbus.yaml`.
-3. Set **GitHubRepoUrl** to this repository's `.git` URL.
-4. When the stack shows `CREATE_COMPLETE`, wait a few minutes for the install.
-   Then open the **StreamlitUrl** output, using `http://`, not `https://`.
-5. If the page does not load: **EC2 → instance → Actions → Monitor and
-   troubleshoot → Get system log**.
+In short:
+1. Push to GitHub. EC2 clones from GitHub.
+2. In the Sandbox, open **CloudFormation → Create stack → Upload a template file**, choose
+   `scripts/nimbus-stack.yaml`, name the stack `nimbus`, and set `GitBranch` if not `main`.
+3. Wait for `CREATE_COMPLETE`. It is only reported after Nimbus answers its health check.
+4. Open the `NimbusUrl` output (http://…:8501).
 
-**What this deploys today:** the full prototype on one EC2 instance, with
-briefing files and SQLite on the instance's EBS root volume. This meets the
-"hosted on AWS" stage, but **not** yet the Lesson 8 RDS design or Feature 6.
+| Stage | What it adds | Status |
+|---|---|---|
+| 1 | VPC with public and private subnets, security group, EC2 installed by user data and run as a systemd service | Template ready; Sandbox run pending |
+| 2 | Amazon RDS for MySQL in the private subnets, reachable only from the app server | Next |
+| 3 | Scaling (Week 9 lesson) | Not started |
 
-**Next stages:**
-- Add RDS (private subnets, reachable only from the EC2 security group) to the template, and pass `NIMBUS_DATABASE_URL` to the app.
-- Add scaling resources per the Week 9 lesson.
-
----
+`scripts/lesson5.yaml` and `scripts/lesson5-nimbus.yaml` are the course's
+Lesson 6–7 templates, kept for reference.
 
 ## Known limitations
 
