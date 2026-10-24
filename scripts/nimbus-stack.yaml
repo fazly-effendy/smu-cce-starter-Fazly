@@ -1,10 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Nimbus (DS600) - Stage 1. A VPC with public and private subnets in two
-  Availability Zones and one EC2 instance that clones Nimbus from GitHub,
-  installs it with EC2 user data and runs it as a service on port 8501.
-  The private subnets are created now so Stage 2 can place Amazon RDS in them.
-  Region: us-east-1 (AWS Academy Sandbox).
+  Nimbus (DS600) - Stage 2. A VPC with public and private subnets in two
+  Availability Zones; Amazon RDS for MySQL in the private subnets, reachable
+  only from the app server's security group; and one EC2 instance that clones
+  Nimbus from GitHub, installs it with EC2 user data, connects it to RDS and
+  runs it as a service on port 8501. Region: us-east-1 (AWS Academy Sandbox).
 
 # ---------------------------------------------------------------------------
 # Parameters: values chosen when the stack is created
@@ -41,6 +41,33 @@ Parameters:
     Description: >
       Who may SSH to the instance. Closed by default (127.0.0.1/32); use the EC2 system log for
       troubleshooting, or set this to your own IP followed by /32 if you need SSH.
+  DBUsername:
+    Type: String
+    Default: nimbusadmin
+    MinLength: 1
+    MaxLength: 16
+    AllowedPattern: "[a-zA-Z][a-zA-Z0-9]*"
+    ConstraintDescription: Letters and digits only, starting with a letter (1-16 characters).
+    Description: Master username for the RDS database.
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 41
+    AllowedPattern: "[a-zA-Z0-9]*"
+    ConstraintDescription: 8-41 letters and digits only (no symbols, so it is safe inside a database URL).
+    Description: >
+      Master password for the RDS database. Type a new one when you create the stack; it is
+      never shown again by CloudFormation (NoEcho). Do not reuse a real password.
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues: [db.t3.micro, db.t4g.micro]
+    Description: RDS instance size (smallest classes only, to stay within the Sandbox).
+  DBEngineVersion:
+    Type: String
+    Default: "8.4"
+    Description: MySQL major version. RDS picks the current minor version.
 
 Resources:
   # -------------------------------------------------------------------------
@@ -172,14 +199,67 @@ Resources:
       Tags: [{Key: Name, Value: nimbus-app-sg}]
 
   # -------------------------------------------------------------------------
+  # Database: Amazon RDS for MySQL in the private subnets (Lesson 8 design).
+  # Not publicly accessible; the only way in is port 3306 from the app
+  # server's security group.
+  # -------------------------------------------------------------------------
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Nimbus database - MySQL only from the Nimbus app server security group
+      VpcId: !Ref NimbusVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+          Description: MySQL from nimbus-app-sg only
+      Tags: [{Key: Name, Value: nimbus-db-sg}]
+
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Nimbus database - private subnets in two Availability Zones
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      Tags: [{Key: Name, Value: nimbus-db-subnets}]
+
+  NimbusDatabase:
+    Type: AWS::RDS::DBInstance
+    Metadata:
+      cfn-lint:
+        config:
+          # W1011 suggests Secrets Manager. We use a NoEcho parameter, the mechanism used in the
+          # course; see "Known limitations" in docs/aws-deployment.md.
+          ignore_checks: [W1011]
+    DeletionPolicy: Delete  # Sandbox: no final snapshot left behind when the stack is deleted
+    UpdateReplacePolicy: Delete
+    Properties:
+      DBInstanceIdentifier: !Sub ${AWS::StackName}-db
+      Engine: mysql
+      EngineVersion: !Ref DBEngineVersion
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: "20"
+      StorageType: gp2
+      DBName: nimbus
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups: [!Ref DbSecurityGroup]
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 0  # Sandbox: no automated backups (faster to create; see docs/aws-deployment.md)
+      DeletionProtection: false
+      Tags: [{Key: Name, Value: nimbus-db}]
+
+  # -------------------------------------------------------------------------
   # Application server. User data installs Nimbus and starts it as a systemd
   # service (restarts automatically and survives reboots). The stack only
-  # reports CREATE_COMPLETE after the app answers its health check, via
-  # cfn-signal and the CreationPolicy below.
+  # reports CREATE_COMPLETE after the app has reached RDS and answers its
+  # health check, via cfn-signal and the CreationPolicy below.
   # -------------------------------------------------------------------------
   AppServer:
     Type: AWS::EC2::Instance
-    DependsOn: PublicDefaultRoute
+    DependsOn: PublicDefaultRoute  # RDS is waited for automatically: user data uses its endpoint
     CreationPolicy:
       ResourceSignal:
         Count: 1
@@ -201,7 +281,7 @@ Resources:
             /opt/aws/bin/cfn-signal -e "$1" --reason "$2" \
               --stack ${AWS::StackName} --resource AppServer --region ${AWS::Region} || true
           }
-          trap 'signal 1 "Nimbus setup failed: see /var/log/nimbus-setup.log or the EC2 system log"' ERR
+          trap 'signal 1 "Nimbus setup failed: see the EC2 system log (lines after nimbus-setup)"' ERR
 
           # 1. System packages (Python 3.9 ships with Amazon Linux 2023)
           dnf install -y git python3-pip aws-cfn-bootstrap
@@ -217,7 +297,23 @@ Resources:
           mkdir -p "$APP_DIR/analyses-data"
           chown -R ec2-user:ec2-user "$APP_DIR"
 
-          # 4. Run Nimbus as a service on port 8501
+          # 4. Database settings. Tracing is switched off from here on so the
+          #    password is never written to the setup log or the system log.
+          #    The file is readable by root only; systemd passes it to the app.
+          set +x
+          umask 077
+          cat > /etc/nimbus.env <<EOF
+          NIMBUS_DATA_DIR=$APP_DIR/analyses-data
+          NIMBUS_DATABASE_URL=mysql+pymysql://${DBUsername}:${DBPassword}@${NimbusDatabase.Endpoint.Address}:${NimbusDatabase.Endpoint.Port}/nimbus?charset=utf8mb4
+          EOF
+          umask 022
+
+          # 5. Check the app server can reach RDS and create the tables
+          ( set -a; . /etc/nimbus.env; set +a
+            cd "$APP_DIR" && runuser -u ec2-user -- .venv/bin/python scripts/check_database.py ) \
+            || { signal 1 "Nimbus cannot reach RDS: check nimbus-db-sg and the database status"; exit 1; }
+
+          # 6. Run Nimbus as a service on port 8501
           cat > /etc/systemd/system/nimbus.service <<EOF
           [Unit]
           Description=Nimbus Streamlit app
@@ -227,7 +323,7 @@ Resources:
           [Service]
           User=ec2-user
           WorkingDirectory=$APP_DIR
-          Environment=NIMBUS_DATA_DIR=$APP_DIR/analyses-data
+          EnvironmentFile=/etc/nimbus.env
           ExecStart=$APP_DIR/.venv/bin/python -m streamlit run src/app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true
           Restart=always
           RestartSec=5
@@ -238,10 +334,10 @@ Resources:
           systemctl daemon-reload
           systemctl enable --now nimbus
 
-          # 5. Wait until the app answers, then tell CloudFormation it worked
+          # 7. Wait until the app answers, then tell CloudFormation it worked
           for _ in $(seq 1 60); do
             if curl -sf http://127.0.0.1:8501/_stcore/health; then
-              signal 0 "Nimbus is running on port 8501"
+              signal 0 "Nimbus is running on port 8501 and connected to RDS"
               exit 0
             fi
             sleep 5
@@ -262,5 +358,11 @@ Outputs:
     Description: VPC for Nimbus
     Value: !Ref NimbusVpc
   PrivateSubnets:
-    Description: Private subnets (used by RDS in Stage 2)
+    Description: Private subnets that hold the database
     Value: !Join [",", [!Ref PrivateSubnetA, !Ref PrivateSubnetB]]
+  DatabaseEndpoint:
+    Description: RDS endpoint (reachable only from inside the VPC, from nimbus-app-sg)
+    Value: !GetAtt NimbusDatabase.Endpoint.Address
+  DatabaseName:
+    Description: Database that holds the briefings, briefing_tickers and rm_notes tables
+    Value: nimbus

@@ -8,9 +8,10 @@ search for it and reopen it exactly as it was.
 
 Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 
-> **Status (prototype v0.7.0, local).** Features 1–5 work end to end in
-> GitHub Codespaces using SQLite and local files. Moving the database to
-> Amazon RDS and adding auto scaling (Feature 6) are the next stages; see
+> **Status (v0.8.0).** Features 1–5 work end to end in GitHub Codespaces
+> (SQLite and local files). On AWS, Stage 1 (VPC + EC2 via CloudFormation) has
+> been deployed in the Sandbox; Stage 2 adds Amazon RDS for MySQL and is ready
+> for its Sandbox run. Auto scaling (Feature 6) follows the Week 9 lesson; see
 > [Project status](#project-status) and [Known limitations](#known-limitations).
 
 ---
@@ -106,7 +107,7 @@ criteria are from the Lesson 5 slides.
 | 2 | Company comparison | Two or more companies; revenue and net-income growth, net margin, return on assets, debt-to-assets, P/E, market cap; rebased share-price chart and holding-period return | ✅ Working locally |
 | 3 | Storage: save analysis | Complete briefing saved as a Markdown file (plus JSON snapshot) in `analyses-data/`; listed and reopened without re-downloading | ✅ Working locally; on EC2 the folder is on the instance's EBS volume |
 | 4 | Storage: RM notes | Structured meeting note saved with, and linked to, its briefing | ✅ Working locally |
-| 5 | Database search | Metadata in SQL tables; search by ticker, date range, client reference, analysis type; open the matching briefing | ✅ Working with SQLite. ⏳ Amazon RDS not yet deployed |
+| 5 | Database search | Metadata in SQL tables; search by ticker, date range, client reference, analysis type; open the matching briefing | ✅ Working with SQLite; tests also pass on MySQL-compatible MariaDB. ⏳ RDS template ready, Sandbox run pending |
 | 6 | Scaling | Automatically add and remove capacity | ⏳ Not started (taught in Week 9) |
 
 | Marking area | Where to look |
@@ -127,7 +128,7 @@ flowchart LR
     B --> A[analytics/<br/>ratios, performance]
     UI -->|Save briefing + note| S[storage/briefing_store.py]
     S --> F[(analyses-data/<br/>.md + .json files<br/>EBS on AWS)]
-    S --> D[(SQL metadata<br/>SQLite now, RDS later)]
+    S --> D[(SQL metadata<br/>SQLite locally<br/>RDS MySQL on AWS)]
     UI -->|Search history| D
     UI -->|Open briefing| F
 ```
@@ -175,7 +176,7 @@ then reads its JSON snapshot. Reopening never contacts Yahoo.
 │       └── briefing_store.py     # save once / reopen, keeping files and DB in step
 ├── tests/                        # pytest: calculations, parsing, storage, full UI workflow
 ├── notebooks/                    # original notebooks (unchanged)
-├── scripts/                      # nimbus-stack.yaml (deployment), lesson templates, debug_news.py
+├── scripts/                      # nimbus-stack.yaml (deployment), check_database.py, debug_news.py, lesson templates
 ├── docs/aws-deployment.md        # step-by-step AWS deployment and evidence checklist
 ├── lessons/                      # course lesson notes
 ├── requirements.txt              # app dependencies
@@ -255,7 +256,8 @@ ORDER BY b.saved_at DESC;
 ```
 
 Tables are created automatically on first run. The code uses SQLAlchemy, so
-the same queries run on SQLite now and on RDS for MySQL later.
+the same queries run on SQLite locally and on Amazon RDS for MySQL on AWS;
+only `NIMBUS_DATABASE_URL` changes.
 
 ---
 
@@ -293,6 +295,19 @@ They cover:
 - `tests/test_app_workflow.py`, which drives the real Streamlit app through
   the full acceptance workflow: generate → compare → note → save → search →
   reopen → restart → reopen → invalid ticker.
+
+**Against MySQL.** The same suite can run against a MySQL database instead of
+SQLite (use an empty, throwaway database; its Nimbus tables are dropped before
+each test):
+
+```bash
+NIMBUS_TEST_DATABASE_URL='mysql+pymysql://<user>:<password>@127.0.0.1:3306/nimbus_test' python -m pytest
+```
+
+All 88 tests pass on MariaDB 10.11 (MySQL-compatible) through PyMySQL.
+`python scripts/check_database.py` checks that the configured database is
+reachable and its tables exist, printing only the host and row counts, never
+the password.
 
 Verified on Python 3.13 (Streamlit 1.66, pandas 3.1, Altair 6) and Python 3.9
 (Streamlit 1.50, pandas 2.3, Altair 5). Python 3.9 is the version on Amazon
@@ -334,14 +349,16 @@ Full steps, evidence checklist, troubleshooting and clean-up are in
 In short:
 1. Push to GitHub. EC2 clones from GitHub.
 2. In the Sandbox, open **CloudFormation → Create stack → Upload a template file**, choose
-   `scripts/nimbus-stack.yaml`, name the stack `nimbus`, and set `GitBranch` if not `main`.
-3. Wait for `CREATE_COMPLETE`. It is only reported after Nimbus answers its health check.
+   `scripts/nimbus-stack.yaml`, name the stack `nimbus`, type a new `DBPassword`
+   (letters and digits, never a real password), and set `GitBranch` if not `main`.
+3. Wait for `CREATE_COMPLETE` (about 15–20 minutes, mostly RDS). It is only reported after
+   Nimbus has connected to RDS and answers its health check.
 4. Open the `NimbusUrl` output (http://…:8501).
 
 | Stage | What it adds | Status |
 |---|---|---|
-| 1 | VPC with public and private subnets, security group, EC2 installed by user data and run as a systemd service | Template ready; Sandbox run pending |
-| 2 | Amazon RDS for MySQL in the private subnets, reachable only from the app server | Next |
+| 1 | VPC with public and private subnets, security group, EC2 installed by user data and run as a systemd service | ✅ Deployed in the Sandbox (`CREATE_COMPLETE`, app reachable) |
+| 2 | Amazon RDS for MySQL in the private subnets, reachable only from the app server | Template ready (cfn-lint clean); Sandbox run pending |
 | 3 | Scaling (Week 9 lesson) | Not started |
 
 `scripts/lesson5.yaml` and `scripts/lesson5-nimbus.yaml` are the course's
@@ -373,6 +390,15 @@ Lesson 6–7 templates, kept for reference.
   are separate. With auto scaling (several EC2 instances), a briefing saved on
   one instance's disk would not be readable from another. The storage design
   must be revisited for Feature 6.
+- **Database password handling.** The RDS password is a `NoEcho` CloudFormation
+  parameter. On the instance it is kept in `/etc/nimbus.env` (readable by root
+  only) and setup logging is switched off before it is written. It is still
+  part of the instance's user data, which anyone with EC2 console access to the
+  account can view. AWS Secrets Manager would avoid that; it is beyond the
+  course requirements and was not used.
+- **Sandbox database settings:** single-AZ, 20 GB, no automated backups, and
+  deleted together with the stack. These keep the Sandbox cost and creation
+  time low; production would use Multi-AZ and backups.
 - **No user accounts:** everyone using an instance sees the same history.
 - **Analysis type** is always `company_briefing` in this version; the filter
   exists so other analysis types can be added later.
