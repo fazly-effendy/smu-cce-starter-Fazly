@@ -49,14 +49,14 @@ def format_multiple(value: Optional[float]) -> str:
 
 
 def format_date(value: Optional[str]) -> str:
-    """ISO date or date-time -> "24 Oct 2026"; unparseable input is shown as given."""
+    """ISO date or date-time -> "4 Oct 2026"; unparseable input is shown as given."""
     if not value:
         return NOT_AVAILABLE
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return value
-    return parsed.strftime("%d %b %Y")
+    return f"{parsed.day} {parsed.strftime('%b %Y')}"
 
 
 def format_timestamp(value: Optional[str]) -> str:
@@ -69,7 +69,7 @@ def format_timestamp(value: Optional[str]) -> str:
         return value
     if parsed.tzinfo is not None:
         parsed = parsed.astimezone(timezone.utc)
-    return parsed.strftime("%d %b %Y, %H:%M UTC")
+    return f"{parsed.day} {parsed.strftime('%b %Y, %H:%M')} UTC"
 
 
 def format_time_ago(value: Optional[str], now: Optional[datetime] = None) -> str:

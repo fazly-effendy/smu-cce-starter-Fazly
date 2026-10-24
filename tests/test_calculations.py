@@ -142,6 +142,6 @@ def test_time_ago_and_eps():
     assert format_time_ago("2026-10-24T11:50:00Z", now) == "10m ago"
     assert format_time_ago("2026-10-24T09:00:00Z", now) == "3h ago"
     assert format_time_ago("2026-10-20T12:00:00Z", now) == "4d ago"
-    assert format_time_ago("2026-08-01T12:00:00Z", now) == "01 Aug 2026"
+    assert format_time_ago("2026-08-01T12:00:00Z", now) == "1 Aug 2026"
     assert format_time_ago(None, now) == "N/A"
     assert format_eps(3.6) == "3.60" and format_eps(None) == "N/A"

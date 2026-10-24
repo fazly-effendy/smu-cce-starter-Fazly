@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
 
@@ -66,7 +67,7 @@ def search_and_open(app: AppTest, ticker: str) -> AppTest:
 def test_acceptance_workflow(isolated_environment):
     # Steps 2-3: start the app
     app = start_app()
-    assert app.title[0].value.endswith("Nimbus")
+    assert any('class="nb-title">Nimbus<' in m.value for m in app.markdown)
 
     # Steps 4-5: two tickers, generate the briefing
     generate(app, " aapl, MSFT ,aapl ")
@@ -76,17 +77,19 @@ def test_acceptance_workflow(isolated_environment):
     # Step 6: normalized price comparison (data behind the chart) and returns
     assert set(briefing.price_index) == {"AAPL", "MSFT"}
     assert all(next(iter(series.values())) == 100.0 for series in briefing.price_index.values())
-    assert [m.delta for m in app.metric if m.delta] == ["14.5% · 1 year", "-7.0% · 1 year"]
-    assert [m.value for m in app.metric if m.label == "P/E (trailing)"] == ["33.5x", "N/A"]
+    assert [m.delta for m in app.metric] == ["14.5% over 1 year", "-7.0% over 1 year"]
+    cards = [m.value for m in app.markdown if 'class="nb-stats"' in m.value]
+    assert "33.5x" in cards[0] and "$3.50T" in cards[0] and "N/A" in cards[1]
     assert set(briefing.price_history) == {"AAPL", "MSFT"}  # actual prices for chart tooltips
 
     # Step 7: normalized financial comparison, formatted, N/A for missing inputs
     table = comparison_values(app)
     assert table.loc["Revenue growth (YoY)", "AAPL"] == "6.4%"
     assert table.loc["Net profit margin", "MSFT"] == "35.8%"
-    assert table.loc["Market capitalisation", "AAPL"] == "$3.50T"
+    assert table.loc["Market cap", "AAPL"] == "$3.50T"
     assert table.loc["Debt-to-assets", "MSFT"] == "N/A"
-    assert table.loc["P/E ratio (trailing)", "MSFT"] == "N/A"
+    assert table.loc["P/E (trailing)", "MSFT"] == "N/A"
+    assert table.loc["Price date", "AAPL"] == "12 Oct 2026"  # date on its own row, not wrapped next to the price
 
     # Formatted statements (Feature 1): no raw 12-digit numbers
     statements = app.table[1].value
@@ -95,7 +98,7 @@ def test_acceptance_workflow(isolated_environment):
     # Step 8: sourced news with clickable links, publisher and date
     news_markdown = " ".join(m.value for m in app.markdown)
     assert "(https://finance.yahoo.com/news/apple-1.html)" in news_markdown
-    assert ":blue-badge[AAPL] · Reuters · " in news_markdown and " ago" in news_markdown
+    assert 'nb-chip accent">AAPL</span> · Reuters · ' in news_markdown and " ago" in news_markdown
     assert "\\$AAPL" in news_markdown  # dollar sign escaped, not rendered as maths
 
     # Step 9: RM note
@@ -224,7 +227,7 @@ def test_confirmation_row_before_generating_makes_no_data_calls():
     app = add_companies(start_app(), "Apple, msft; Nvidia")
     assert app.session_state["selected_tickers"] == ["AAPL", "MSFT", "NVDA"]
     assert app.multiselect(key="selected_tickers").value == ["AAPL", "MSFT", "NVDA"]
-    assert any(m.value == ":blue-badge[NVDA]" for m in app.markdown)
+    assert any(m.value == '<span class="nb-chip accent">NVDA</span>' for m in app.markdown)
     assert app.session_state["briefing"] is None
     assert fake_yahoo.data_calls() == 0  # only name searches so far, no market data
 
@@ -276,20 +279,58 @@ def markdown_containing(app: AppTest, text: str) -> str:
     return next(m.value for m in app.markdown if text in m.value)
 
 
+def dataframe_with(app: AppTest, column: str) -> pd.DataFrame:
+    return next(d.value for d in app.dataframe if column in d.value.columns)
+
+
 def test_analyst_view_shows_consensus_target_and_upside():
     app = generate(start_app(), "AAPL, MSFT")
-    table = markdown_containing(app, "| Company | Consensus |")
-    assert "| AAPL | :green-badge[Buy] | 40 | $251.90 | 10.0% | $180.00 – $300.00 |" in table
-    assert "| MSFT | N/A | N/A | N/A | N/A | N/A |" in table  # missing data is N/A, never zero
+    frame = dataframe_with(app, "Consensus").set_index("Company")
+    assert frame.loc["AAPL", "Consensus"] == "🟢 Buy"
+    assert frame.loc["AAPL", "Analysts"] == 40 and frame.loc["AAPL", "Target"] == 251.9
+    assert frame.loc["AAPL", "Upside"] == pytest.approx(10.0)  # shown as +10.0%
+    assert (frame.loc["AAPL", "Low"], frame.loc["AAPL", "High"]) == (180.0, 300.0)
+    assert frame.loc["MSFT"].drop("Ccy").isna().all()  # missing data stays blank, never zero
     charts = app.get("vega_lite_chart") + app.get("arrow_vega_lite_chart")  # element name differs by version
     assert len(charts) == 2  # price chart + ratings bar
 
 
 def test_earnings_table_shows_next_date_and_beat_or_miss():
     app = generate(start_app(), "AAPL, MSFT")
-    table = markdown_containing(app, "| Company | Next earnings |")
-    assert f"| MSFT | {fake_yahoo.NEXT_EARNINGS.strftime('%d %b %Y')} | 3.62 |" in table
-    assert "3.65 vs 3.35 | :green-badge[Beat] 9.0% |" in table
+    frame = dataframe_with(app, "Result").set_index("Company")
+    assert frame.loc["MSFT", "Next date"].date() == fake_yahoo.NEXT_EARNINGS
+    assert frame.loc["MSFT", "Next EPS est."] == 3.62
+    assert (frame.loc["MSFT", "EPS actual"], frame.loc["MSFT", "EPS est."]) == (3.65, 3.35)
+    assert frame.loc["MSFT", "Surprise"] == pytest.approx(8.955, abs=0.01)
+    assert frame.loc["MSFT", "Result"] == "🟢 Beat"
+
+
+def test_unusual_values_are_flagged_but_kept(monkeypatch):
+    """P/E over 100 and EPS surprise over 100% keep their real values and get a ⚠ marker."""
+    monkeypatch.setitem(fake_yahoo.DATA["AAPL"]["info"], "trailingPE", 409.2)
+    dates = fake_yahoo.DATA["MSFT"]["earnings_dates"].copy()
+    dates.iloc[1, dates.columns.get_loc("Reported EPS")] = 9.11
+    dates.iloc[1, dates.columns.get_loc("EPS Estimate")] = 2.90
+    monkeypatch.setitem(fake_yahoo.DATA["MSFT"], "earnings_dates", dates)
+    app = generate(start_app(), "AAPL, MSFT")
+    assert comparison_values(app).loc["P/E (trailing)", "AAPL"] == "409.2x ⚠"
+    card = next(m.value for m in app.markdown if 'class="nb-stats"' in m.value and "409.2x" in m.value)
+    assert "⚠ unusual" in card and "one-off items" in card  # tooltip text
+    earnings = dataframe_with(app, "Result").set_index("Company")
+    assert earnings.loc["MSFT", "Result"] == "🟢 Beat ⚠"
+    assert earnings.loc["MSFT", "Surprise"] == pytest.approx((9.11 - 2.90) / 2.90 * 100)
+
+
+def test_comparison_table_bolds_best_value_and_colours_negatives():
+    from ui.tables import comparison_styles
+    from services.briefing_builder import build_briefing
+    from services import yahoo
+    briefing = build_briefing(["AAPL", "MSFT"], "1 year", "1y", yahoo.fetch_price_history, yahoo.fetch_company_data)
+    styles = comparison_styles(briefing)
+    assert "font-weight: 700" in styles.loc["Return (1 year)", "AAPL"]  # 14.5% beats -7.0%
+    assert "color" in styles.loc["Return (1 year)", "MSFT"]  # negative shown in red
+    assert "font-weight: 700" in styles.loc["Net profit margin", "MSFT"]  # 35.8% beats 26.9%
+    assert styles.loc["Debt-to-assets", "AAPL"] == ""  # only one company reports it: nothing to rank
 
 
 def test_news_feed_is_newest_first_filterable_and_shows_thumbnails():

@@ -8,7 +8,7 @@ search for it and reopen it exactly as it was.
 
 Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 
-> **Status (prototype v0.5.0, local).** Features 1–5 work end to end in
+> **Status (prototype v0.6.0, local).** Features 1–5 work end to end in
 > GitHub Codespaces using SQLite and local files. Moving the database to
 > Amazon RDS and adding auto scaling (Feature 6) are the next stages; see
 > [Project status](#project-status) and [Known limitations](#known-limitations).
@@ -81,7 +81,7 @@ install Jupyter support: `pip install jupyter ipykernel`.
    company. Each card shows the linked headline, company, publisher, how long
    ago it was published, the summary and a thumbnail where Yahoo provides one.
    **Save to note** keeps an article with the RM note.
-5. **📝 Notes & save:** fill in the meeting note (any articles you saved are
+5. **📝 Notes:** fill in the meeting note (any articles you saved are
    listed), then select **Save briefing and RM notes**. Each briefing can be
    saved once.
 6. **🗂️ History:** filter by ticker, date range, client reference or analysis
@@ -157,6 +157,10 @@ then reads its JSON snapshot. Reopening never contacts Yahoo.
 │   │   ├── yahoo.py              # all yfinance calls and parsing (from the notebooks)
 │   │   ├── company_lookup.py     # resolve_company(): names/tickers -> ranked matches
 │   │   └── briefing_builder.py   # combines several companies into one briefing
+│   ├── ui/
+│   │   ├── theme.py              # design system: palette, CSS, chips, section titles
+│   │   ├── charts.py             # Altair: rebased share prices, analyst ratings bar
+│   │   └── tables.py             # comparison table styling, analyst/earnings tables, ⚠ flags
 │   ├── analytics/
 │   │   ├── ratios.py             # growth rates and financial ratios
 │   │   ├── performance.py        # rebased prices, holding-period return
@@ -171,7 +175,7 @@ then reads its JSON snapshot. Reopening never contacts Yahoo.
 ├── lessons/                      # course lesson notes
 ├── requirements.txt              # app dependencies
 ├── requirements-dev.txt          # + pytest
-├── .streamlit/config.toml        # theme: one accent colour (#2563EB)
+├── .streamlit/config.toml        # dark theme, one accent colour (#2563EB)
 ├── .env.example                  # configuration variable names (no secrets)
 └── .gitignore                    # excludes .venv/, analyses-data/, *.db, .env
 ```
@@ -346,6 +350,11 @@ briefing files and SQLite on the instance's EBS root volume. This meets the
   recommendation of its own.
 - **Saved articles** are stored in the briefing's snapshot files (Markdown and
   JSON), not as separate database rows.
+- **Unusual values are flagged, not changed.** A trailing P/E above 100x or an
+  EPS surprise above ±100% is shown as reported with a ⚠ marker, because such
+  figures often reflect one-off items or depressed earnings.
+- **Layout** is capped at 1300px wide. If the page still looks narrow, check
+  **⋮ → Settings → Wide mode** in the app menu (a per-browser setting).
 - **Files are local to one machine.** Briefings saved in Codespaces and on EC2
   are separate. With auto scaling (several EC2 instances), a briefing saved on
   one instance's disk would not be readable from another. The storage design

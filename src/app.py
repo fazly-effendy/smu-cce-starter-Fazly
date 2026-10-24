@@ -16,7 +16,6 @@ import hashlib
 from datetime import date
 from typing import Dict, List, Optional
 
-import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -52,28 +51,12 @@ from services.company_lookup import (
     suggest_company,
 )
 from storage import briefing_store, database, snapshots
+from ui import charts, tables, theme
+from ui.theme import chip, esc, flag, html_block, section
 
 st.set_page_config(page_title="Nimbus · Company briefings", page_icon="☁️", layout="wide")
 
-# Accent colour (same as primaryColor in .streamlit/config.toml) followed by
-# distinct, colour-blind-friendly colours for further companies.
-CHART_COLOURS = ["#2563EB", "#F59E0B", "#10B981", "#DB2777", "#7C3AED", "#0891B2"]
-# Analyst rating buckets: green for buy, grey for hold, red for sell.
-RATING_BUCKETS = [("strongBuy", "Strong buy", "#15803D"), ("buy", "Buy", "#4ADE80"), ("hold", "Hold", "#94A3B8"),
-                  ("sell", "Sell", "#F87171"), ("strongSell", "Strong sell", "#B91C1C")]
-CONSENSUS_BADGE = {"strong buy": "green", "buy": "green", "outperform": "green", "hold": "gray",
-                   "underperform": "red", "sell": "red", "strong sell": "red"}
-RESULT_BADGE = {"beat": "green", "miss": "red", "in line": "gray"}
-POPULAR_TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "MU", "JPM", "D05.SI", "O39.SI"]
-
-_PAGE_CSS = """
-<style>
-/* Tighter top spacing so the briefing starts higher on the page */
-.block-container {padding-top: 2rem; padding-bottom: 3rem;}
-/* Slightly smaller metric values so four fit comfortably in a card */
-div[data-testid="stMetricValue"] {font-size: 1.6rem;}
-</style>
-"""
+POPULAR_TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "MU", "JPM", "D05.SI", "O39.SI", "U11.SI"]
 
 
 # --------------------------------------------------------------------------
@@ -108,11 +91,6 @@ def md_text(text: Optional[str]) -> str:
     for char in ("\\", "$", "*", "_", "[", "]", "`", "#", "<", ">"):
         text = text.replace(char, "\\" + char)
     return text
-
-
-def badge(text: str, colour: str = "blue") -> str:
-    safe = text.replace("[", "(").replace("]", ")").replace("$", "\\$")
-    return f":{colour}-badge[{safe}]"
 
 
 def init_state() -> None:
@@ -239,91 +217,33 @@ def render_notices(briefing: Briefing) -> None:
             st.markdown("\n".join(f"- {p}" for p in problems))
 
 
-def comparison_table(briefing: Briefing) -> pd.DataFrame:
-    companies = briefing.companies
-    rows = {
-        "Last close": [f"{format_price(c.last_close, c.currency)} ({format_date(c.last_close_date)})" for c in companies],
-        f"Holding-period return ({briefing.analysis_period})": [
-            format_percent(briefing.holding_period_returns.get(c.ticker)) for c in companies
-        ],
-        "Market capitalisation": [format_money(c.market_cap, c.currency) for c in companies],
-        "P/E ratio (trailing)": [format_multiple(c.pe_ratio) for c in companies],
-    }
-    for key, label in RATIO_LABELS.items():
-        rows[label] = [format_percent(c.ratios.get(key)) for c in companies]
-    rows["Fiscal year used for ratios"] = [
-        f"FY ending {format_date(c.fiscal_year_end)}" if c.fiscal_year_end else NOT_AVAILABLE for c in companies
-    ]
-    return pd.DataFrame(rows, index=[c.ticker for c in companies]).T
-
-
 def render_company_cards(briefing: Briefing) -> None:
+    """One card per company: name + ticker, large last close with coloured return, then market cap and P/E."""
     companies = briefing.companies
     per_row = min(len(companies), 3)
     for start in range(0, len(companies), per_row):
         columns = st.columns(per_row)
         for column, company in zip(columns, companies[start:start + per_row]):
             with column.container(border=True):
-                st.markdown(f"**{md_text(company.name)}** &nbsp; {badge(company.ticker)}")
+                html_block(f'<div class="nb-card-title" title="{esc(company.name)}">{esc(company.name)} '
+                           f'{chip(company.ticker)}</div>')
                 hpr = briefing.holding_period_returns.get(company.ticker)
-                left, middle, right = st.columns(3)
-                left.metric(
+                st.metric(
                     "Last close",
                     format_price(company.last_close, company.currency),
-                    delta=f"{format_percent(hpr)} · {briefing.analysis_period}" if hpr is not None else None,
-                    help=f"Adjusted close on {format_date(company.last_close_date)}. "
-                         "The coloured figure is the holding-period return.",
+                    delta=f"{format_percent(hpr)} over {briefing.analysis_period}" if hpr is not None else None,
+                    help="Adjusted closing price. The coloured figure is the holding-period return.",
                 )
-                middle.metric("Market cap", format_money(company.market_cap, company.currency))
-                right.metric("P/E (trailing)", format_multiple(company.pe_ratio))
-
-
-def price_chart(briefing: Briefing) -> Optional[alt.LayerChart]:
-    """Rebased share prices with a 100 baseline, a legend and hover tooltips."""
-    currencies = {c.ticker: c.currency for c in briefing.companies}
-    rows = []
-    for ticker, series in briefing.price_index.items():
-        prices = briefing.price_history.get(ticker, {})
-        for day, rebased in series.items():
-            rows.append({
-                "Date": day,
-                "Company": ticker,
-                "Rebased": rebased,
-                "Close": format_price(prices.get(day), currencies.get(ticker)) if prices else NOT_AVAILABLE,
-            })
-    if not rows:
-        return None
-    data = pd.DataFrame(rows)
-    data["Date"] = pd.to_datetime(data["Date"])
-    tickers = list(briefing.price_index)
-
-    low = min(data["Rebased"].min(), 100.0)
-    high = max(data["Rebased"].max(), 100.0)
-    pad = max((high - low) * 0.08, 2.0)
-
-    base = alt.Chart(data).encode(
-        x=alt.X("Date:T", title=None, scale=alt.Scale(nice=False), axis=alt.Axis(format="%b %Y", tickCount=6)),
-        y=alt.Y("Rebased:Q", title="Rebased price (start = 100)",
-                scale=alt.Scale(domain=[low - pad, high + pad], zero=False, nice=False)),
-        color=alt.Color("Company:N", scale=alt.Scale(domain=tickers, range=CHART_COLOURS[:len(tickers)]),
-                        legend=alt.Legend(orient="top", title=None)),
-    )
-    hover = alt.selection_point(fields=["Date"], nearest=True, on="mouseover", empty=False, clear="mouseout")
-    lines = base.mark_line(strokeWidth=2.2)
-    points = base.mark_circle(size=70).encode(
-        opacity=alt.condition(hover, alt.value(1.0), alt.value(0.0)),
-        tooltip=[
-            alt.Tooltip("Date:T", format="%d %b %Y"),
-            alt.Tooltip("Company:N"),
-            alt.Tooltip("Rebased:Q", format=".1f", title="Rebased"),
-            alt.Tooltip("Close:N", title="Adjusted close"),
-        ],
-    ).add_params(hover)
-    cursor = alt.Chart(data).mark_rule(color="#94A3B8", strokeWidth=1).encode(x="Date:T").transform_filter(hover)
-    baseline = alt.Chart(pd.DataFrame({"Rebased": [100.0]})).mark_rule(
-        strokeDash=[6, 4], color="#94A3B8", strokeWidth=1.5
-    ).encode(y="Rebased:Q")
-    return alt.layer(baseline, lines, cursor, points).properties(height=380, width="container")
+                pe_marker = flag(tables.PE_FLAG_TEXT) if tables.pe_is_unusual(company.pe_ratio) else ""
+                html_block(
+                    f'<div class="nb-muted">As of {esc(format_date(company.last_close_date))}</div>'
+                    '<div class="nb-stats">'
+                    f'<div class="nb-stat"><span class="nb-label">Market cap</span>'
+                    f'<span class="nb-value">{esc(format_money(company.market_cap, company.currency))}</span></div>'
+                    f'<div class="nb-stat"><span class="nb-label">P/E (trailing)</span>'
+                    f'<span class="nb-value">{esc(format_multiple(company.pe_ratio))}{pe_marker}</span></div>'
+                    '</div>'
+                )
 
 
 def render_comparison(briefing: Briefing) -> None:
@@ -336,113 +256,57 @@ def render_comparison(briefing: Briefing) -> None:
     if len(companies) < 2:
         with st.container(border=True):
             st.markdown("**Add another ticker to compare.**")
-            st.caption(
-                "Only one company was retrieved, so the measures below have nothing to be compared with. "
-                "Add a second company in the box above, or use Quick add in the sidebar, then generate again."
-            )
+            st.caption("Only one company was retrieved. Add a second one above, or use Quick add, and generate again.")
 
-    st.markdown("#### Financial comparison")
-    st.table(comparison_table(briefing))
+    section("Financial comparison")
+    st.table(tables.comparison_styler(briefing))
+    unusual = [c.ticker for c in companies if tables.pe_is_unusual(c.pe_ratio)]
+    st.caption("Bold = best in row (lowest for debt-to-assets). Red = negative. N/A = not reported by Yahoo."
+               + (f" ⚠ P/E above {tables.PE_UNUSUAL:.0f}x for {', '.join(unusual)}: earnings may be depressed "
+                  "or include one-off items." if unusual else ""))
     with st.expander("How these measures are calculated"):
         st.markdown(
-            "- **Revenue / net income growth:** latest fiscal year ÷ previous fiscal year − 1. "
-            "N/A if the previous year is zero or negative.\n"
-            "- **Net profit margin:** net income ÷ revenue (latest fiscal year).\n"
-            "- **Return on assets:** net income ÷ total assets at the same fiscal year-end.\n"
-            "- **Debt-to-assets:** total debt ÷ total assets at the same fiscal year-end.\n"
-            "- **Holding-period return:** last ÷ first adjusted closing price over the dates all companies "
-            "traded; adjusted prices include dividends and splits. Historical, not a forecast.\n"
-            "- **N/A** means Yahoo Finance did not report the inputs. Nimbus never substitutes zero.\n"
-            "- Companies can have different fiscal year-ends; the last row shows which year each uses."
+            "- **Return:** last ÷ first adjusted close over the dates all companies traded (includes dividends "
+            "and splits). Historical, not a forecast.\n"
+            "- **Revenue / net income growth:** latest fiscal year ÷ previous − 1; N/A if the previous year is "
+            "zero or negative.\n"
+            "- **Net profit margin:** net income ÷ revenue. **Return on assets:** net income ÷ total assets.\n"
+            "- **Debt-to-assets:** total debt ÷ total assets, at the same fiscal year-end.\n"
+            "- **N/A** means Yahoo Finance did not report the inputs. Nimbus never substitutes zero."
         )
 
-    st.markdown("#### Share-price performance")
-    chart = price_chart(briefing)
+    section("Share-price performance")
+    chart = charts.price_chart(briefing)
     if chart is None:
         st.info("Not enough common trading days to draw a comparison chart.")
     else:
         st.altair_chart(chart)
         if briefing.price_window:
-            st.caption(
-                f"Adjusted closing prices from {format_date(briefing.price_window[0])} to "
-                f"{format_date(briefing.price_window[1])}, on dates when every company traded. Each line starts "
-                "at 100 (dashed line); hover for the date and actual price."
-            )
+            st.caption(f"Rebased to 100 on {format_date(briefing.price_window[0])}; adjusted closes to "
+                       f"{format_date(briefing.price_window[1])} on days all companies traded. Hover for prices.")
 
     render_analyst_view(briefing)
     render_earnings(briefing)
 
 
-def ratings_chart(briefing: Briefing) -> Optional[alt.Chart]:
-    """Share of analysts per recommendation, one bar per company."""
-    rows = []
-    for company in briefing.companies:
-        for order, (key, label, _) in enumerate(RATING_BUCKETS):
-            count = (company.ratings or {}).get(key)
-            if count:
-                rows.append({"Company": company.ticker, "Rating": label, "Analysts": count, "Order": order})
-    if not rows:
-        return None
-    tickers = [c.ticker for c in briefing.companies if c.ratings]
-    return alt.Chart(pd.DataFrame(rows)).mark_bar().encode(
-        y=alt.Y("Company:N", title=None, sort=tickers),
-        x=alt.X("Analysts:Q", stack="normalize", title="Share of analysts (current month)",
-                axis=alt.Axis(format="%")),
-        color=alt.Color("Rating:N", legend=alt.Legend(orient="top", title=None),
-                        scale=alt.Scale(domain=[b[1] for b in RATING_BUCKETS], range=[b[2] for b in RATING_BUCKETS])),
-        order=alt.Order("Order:Q"),
-        tooltip=["Company:N", "Rating:N", "Analysts:Q"],
-    ).properties(height=36 * len(tickers) + 50, width="container")
-
-
 def render_analyst_view(briefing: Briefing) -> None:
-    st.markdown("#### Analyst view")
-    chart = ratings_chart(briefing)
+    section("Analyst view")
+    chart = charts.ratings_chart(briefing)
     if chart is not None:
         st.altair_chart(chart)
-    rows = []
-    for company in briefing.companies:
-        view = company.analyst or {}
-        consensus = view.get("recommendation")
-        target_range = (f"{format_price(view.get('target_low'), company.currency)} – "
-                        f"{format_price(view.get('target_high'), company.currency)}"
-                        if view.get("target_low") is not None and view.get("target_high") is not None else NOT_AVAILABLE)
-        rows.append(
-            f"| {company.ticker} | "
-            + (badge(consensus.title(), CONSENSUS_BADGE.get(consensus, "gray")) if consensus else NOT_AVAILABLE)
-            + f" | {view.get('analysts') or NOT_AVAILABLE} | {format_price(view.get('target_mean'), company.currency)}"
-            f" | {format_percent(view.get('upside'))} | {target_range} |"
-        )
-    st.markdown(
-        "| Company | Consensus | Analysts | Mean price target | Upside to target | Target range |\n"
-        "|---|---|---|---|---|---|\n" + "\n".join(rows)
-    )
-    st.caption("Analyst consensus and price targets from Yahoo Finance at retrieval time. Upside = mean target ÷ "
-               "last close − 1. These are third-party analyst views, not Nimbus recommendations.")
+    st.dataframe(tables.analyst_frame(briefing), hide_index=True, column_config=tables.analyst_columns())
+    st.caption("Third-party analyst views from Yahoo Finance at retrieval time, not Nimbus recommendations. "
+               "Blank = not reported.")
 
 
 def render_earnings(briefing: Briefing) -> None:
-    st.markdown("#### Earnings")
-    rows = []
-    for company in briefing.companies:
-        e = company.earnings or {}
-        result = e.get("last_result")
-        outcome = NOT_AVAILABLE
-        if result:
-            surprise = e.get("last_surprise")
-            outcome = badge(result.title(), RESULT_BADGE.get(result, "gray")) + (
-                f" {format_percent(surprise)}" if surprise is not None else "")
-        rows.append(
-            f"| {company.ticker} | {format_date(e.get('next_date'))} | {format_eps(e.get('next_eps_estimate'))} | "
-            f"{format_date(e.get('last_date'))} | {format_eps(e.get('last_eps_actual'))} vs "
-            f"{format_eps(e.get('last_eps_estimate'))} | {outcome} |"
-        )
-    st.markdown(
-        "| Company | Next earnings | EPS estimate (next) | Last reported | EPS actual vs estimate | Result |\n"
-        "|---|---|---|---|---|---|\n" + "\n".join(rows)
-    )
-    st.caption("From Yahoo Finance at retrieval time; scheduled dates can change. Result compares reported EPS with "
-               "the analyst estimate: surprise = (actual − estimate) ÷ |estimate|.")
+    section("Earnings")
+    st.dataframe(tables.earnings_frame(briefing), hide_index=True, column_config=tables.earnings_columns())
+    unusual = [c.ticker for c in briefing.companies
+               if tables.surprise_is_unusual((c.earnings or {}).get("last_surprise"))]
+    st.caption("Scheduled dates can change. Blank = not reported."
+               + (f" ⚠ {', '.join(unusual)}: surprise over 100%; reported EPS may include one-off items."
+                  if unusual else ""))
 
 
 def render_financials(briefing: Briefing) -> None:
@@ -451,7 +315,7 @@ def render_financials(briefing: Briefing) -> None:
         return
     for company in briefing.companies:
         with st.container(border=True):
-            st.markdown(f"**{md_text(company.name)}** &nbsp; {badge(company.ticker)}")
+            html_block(f'<div class="nb-card-title">{esc(company.name)} {chip(company.ticker)}</div>')
             if company.financials:
                 years = sorted({y for values in company.financials.values() for y in values}, reverse=True)
                 table = pd.DataFrame(
@@ -467,11 +331,9 @@ def render_financials(briefing: Briefing) -> None:
                 st.table(table)
             else:
                 st.info("Yahoo Finance returned no financial statements for this company.")
-            st.caption(
-                f"Annual statements. Source: [{company.source_name}]({company.source_url}), "
-                f"retrieved {format_timestamp(company.retrieved_at)}. "
-                f"Figures in {company.financial_currency or 'the reporting currency'}."
-            )
+            st.caption(f"Annual statements in {company.financial_currency or 'reporting currency'} · "
+                       f"[{company.source_name}]({company.source_url}) · retrieved "
+                       f"{format_timestamp(company.retrieved_at)}")
 
 
 def article_key(item) -> str:
@@ -510,10 +372,8 @@ def render_news_feed(briefing: Briefing, live: bool) -> None:
     saved = briefing.briefing_id in st.session_state["saved"]
     pinned = st.session_state["pinned_articles"].get(briefing.briefing_id, [])
     can_pin = live and not saved
-    st.caption(
-        f"{len(items)} {'article' if len(items) == 1 else 'articles'}, newest first."
-        + (" Use **Save to note** to keep an article with your RM note." if can_pin else "")
-    )
+    st.caption(f"{len(items)} {'article' if len(items) == 1 else 'articles'}, newest first"
+               + (" · ☆ Save to note keeps an article with your RM note" if can_pin else ""))
     if not items:
         st.info("No recent news available from Yahoo Finance.")
 
@@ -528,7 +388,8 @@ def render_news_feed(briefing: Briefing, live: bool) -> None:
             text.markdown(f"**[{headline}]({item.source_url})**" if item.source_url else f"**{headline}**")
             when = (format_time_ago(item.published_at) if live else format_date(item.published_at)) \
                 if item.published_at else "date not provided"
-            text.markdown(" · ".join([badge(item.ticker), md_text(item.publisher) or "Publisher not provided", when]))
+            text.markdown(f'<div class="nb-meta">{chip(item.ticker)} · {esc(item.publisher or "Publisher not provided")}'
+                          f' · {esc(when)}</div>', unsafe_allow_html=True)
             text.markdown(md_text(item.summary) if item.summary else "_No summary provided by the source._")
             if can_pin:
                 key = article_key(item)
@@ -580,27 +441,26 @@ def render_article_list(articles) -> str:
 
 def sidebar() -> None:
     with st.sidebar:
-        st.markdown("### ☁️ Nimbus")
-        st.caption("Company briefings for relationship managers")
-
-        st.markdown("**Quick add**")
-        columns = st.columns(2)
+        theme.side_title("Quick add")
+        columns = st.columns(3)
         for index, ticker in enumerate(POPULAR_TICKERS):
-            columns[index % 2].button(ticker, key=f"quick_{ticker}", on_click=quick_add, args=(ticker,))
+            columns[index % 3].button(ticker, key=f"quick_{ticker}", on_click=quick_add, args=(ticker,),
+                                      width="stretch")
 
-        st.markdown("**Recent briefings**")
+        theme.side_title("Recent briefings")
         try:
             recent = database.search_briefings(limit=5)
             if not recent:
-                st.caption("Saved briefings will appear here.")
+                st.caption("🗂️ No saved briefings yet. Save one from **Notes** and it appears here.")
         except Exception:
             recent = []
-            st.caption("Saved briefings are unavailable (database not reachable).")
+            st.caption("⚠️ Saved briefings are unavailable: the database cannot be reached.")
         for row in recent:
-            label = f"{row['tickers']} · {row['saved_at'].strftime('%d %b %H:%M')}"
+            label = f"{row['tickers']} · {row['saved_at'].day} {row['saved_at'].strftime('%b %H:%M')}"
             st.button(label, key=f"recent_{row['briefing_id']}", on_click=open_from_sidebar,
-                      args=(row["briefing_id"],), help=row["client_reference"] or None)
+                      args=(row["briefing_id"],), help=row["client_reference"] or None, width="stretch")
 
+        theme.side_title("About")
         with st.expander("About the data"):
             st.markdown(
                 "- Market data, statements, ratings and news: **Yahoo Finance** (via yfinance)\n"
@@ -628,8 +488,9 @@ def company_picker() -> None:
         st.caption(f"Matches for “{md_text(feedback['query'])}”. Choose one to add:")
         for index, match in enumerate(suggestions):
             left, right = st.columns([6, 1], vertical_alignment="center")
-            left.markdown(f"{md_text(match.name)} &nbsp; {badge(match.ticker)}"
-                          + (f" &nbsp; · {md_text(match.exchange)}" if match.exchange else ""))
+            left.markdown(f"{esc(match.name)} {chip(match.ticker)}"
+                          + (f' <span class="nb-muted">· {esc(match.exchange)}</span>' if match.exchange else ""),
+                          unsafe_allow_html=True)
             right.button("Add", key=f"pick_{index}_{match.ticker}", on_click=pick_suggestion,
                          args=(match, feedback["query"], suggestions))
     for typed, suggestion in feedback.get("not_found") or []:
@@ -666,25 +527,27 @@ def company_picker() -> None:
             match = companies.get(ticker, CompanyMatch(ticker, ticker, None, "typed"))
             typed = st.session_state["typed_as"].get(ticker)
             alternatives = st.session_state["alternatives"].get(ticker, [])
-            c1, c2, c3, c4 = st.columns([4, 1.4, 1.6, 3], vertical_alignment="center")
-            c1.markdown(f"**{md_text(match.name)}**" + (f"  \n_typed “{md_text(typed)}”_" if typed else ""))
-            c2.markdown(badge(ticker))
-            c3.caption(match.exchange or ("Checked on generate" if match.source == "typed" else "Exchange n/a"))
-            if alternatives:
-                options = [ticker] + [m.ticker for m in alternatives]
-                labels = {ticker: f"Keep {ticker}"}
-                labels.update({m.ticker: f"Switch to {m.label}" for m in alternatives})
-                c4.selectbox("Other matches", options, key=f"switch_{ticker}", format_func=labels.get,
-                             on_change=switch_listing, args=(ticker,), label_visibility="collapsed")
+            name_col, ticker_col, exchange_col, choice_col = st.columns([3, 1, 1.2, 1.8], vertical_alignment="center")
+            name_col.markdown(f"**{md_text(match.name)}**" + (f" · _typed “{md_text(typed)}”_" if typed else ""))
+            ticker_col.markdown(chip(ticker), unsafe_allow_html=True)
+            exchange_col.caption(match.exchange or ("Checked on generate" if match.source == "typed" else "—"))
+            if alternatives:  # only where there is a real choice
+                with choice_col.popover(f"⇄ {len(alternatives)} other match{'es' if len(alternatives) > 1 else ''}"):
+                    options = [ticker] + [m.ticker for m in alternatives]
+                    labels = {ticker: f"Keep {ticker}"}
+                    labels.update({m.ticker: f"Use {m.label}" for m in alternatives})
+                    st.selectbox("Use another listing", options, key=f"switch_{ticker}", format_func=labels.get,
+                                 on_change=switch_listing, args=(ticker,))
 
 
 def generate_section() -> None:
     with st.container(border=True):
-        st.markdown("**New briefing**")
+        html_block('<div class="nb-card-title">New briefing</div>')
         company_picker()
-        left, right = st.columns([2, 5], vertical_alignment="bottom")
-        period_label = left.selectbox("Share-price period", list(ANALYSIS_PERIODS), key="period_label")
-        clicked = right.button("Generate briefing", type="primary")
+        period_col, button_col, _ = st.columns([1.3, 1.1, 3.6], vertical_alignment="bottom")
+        period_label = period_col.selectbox("Price period", list(ANALYSIS_PERIODS), key="period_label",
+                                            help="Period for the share-price chart and returns")
+        clicked = button_col.button("Generate briefing", type="primary", width="stretch")
 
     if not clicked:
         return
@@ -883,7 +746,8 @@ def render_historical(briefing_id: str) -> None:
         return
     st.divider()
     left, right = st.columns([4, 1], vertical_alignment="bottom")
-    left.markdown(f"### Saved briefing: {', '.join(briefing.successful_tickers)}")
+    left.markdown(f'<div class="nb-section">Saved briefing · {esc(", ".join(briefing.successful_tickers))}</div>',
+                  unsafe_allow_html=True)
     try:
         right.download_button(
             "Download as Markdown",
@@ -900,13 +764,13 @@ def render_historical(briefing_id: str) -> None:
         "retrieved current data."
     )
     render_notices(briefing)
-    st.markdown("#### RM notes")
+    section("RM notes")
     render_note(briefing.note)
-    st.markdown("#### Company comparison")
+    section("Company comparison")
     render_comparison(briefing)
-    st.markdown("#### Financial statements")
+    section("Financial statements")
     render_financials(briefing)
-    st.markdown("#### News")
+    section("News")
     render_news_feed(briefing, live=False)
 
 
@@ -916,14 +780,10 @@ def render_historical(briefing_id: str) -> None:
 
 def main() -> None:
     init_state()
-    st.markdown(_PAGE_CSS, unsafe_allow_html=True)
+    theme.inject_css()
     sidebar()
 
-    st.title("☁️ Nimbus")
-    st.caption(
-        "Compare companies, review financials, news and analyst ratings, record meeting notes and reopen "
-        "earlier briefings."
-    )
+    theme.header("Company briefings for relationship managers")
     generate_section()
 
     briefing: Optional[Briefing] = st.session_state.get("briefing")
@@ -938,7 +798,7 @@ def main() -> None:
     if st.session_state.pop("sidebar_opened", False):
         st.toast("Saved briefing opened in the History tab.", icon="📁")
 
-    tabs = st.tabs(["📊 Compare", "📑 Financials", "📰 News", "📝 Notes & save", "🗂️ History"])
+    tabs = st.tabs(["📊 Compare", "📑 Financials", "📰 News", "📝 Notes", "🗂️ History"])
     with tabs[0]:
         if briefing is None:
             st.info("Enter at least two companies above and select **Generate briefing**.")
