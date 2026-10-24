@@ -1,116 +1,336 @@
-## Installation Instructions  
+# ☁️ Nimbus: company briefings for relationship managers
 
-If you are new to Python, follow these steps in a terminal from the project folder.
+Nimbus turns three separate Python notebooks (company financials, company news,
+stock prices and analyst ratings) into one browser-based application. A
+relationship manager (RM) can compare companies, review formatted financials,
+read sourced news, record meeting notes, save the whole briefing, and later
+search for it and reopen it exactly as it was.
 
-1. Open a terminal in the repository folder.
-2. Create a virtual environment so your project dependencies stay separate from other Python projects:
+Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
+
+> **Status (prototype v0.2.0, local).** Features 1–5 work end to end in
+> GitHub Codespaces using SQLite and local files. Moving the database to
+> Amazon RDS and adding auto scaling (Feature 6) are the next stages; see
+> [Project status](#project-status) and [Known limitations](#known-limitations).
+
+---
+
+## Contents
+
+1. [Quick start (Codespaces)](#quick-start-codespaces)
+2. [Using Nimbus: the demo flow](#using-nimbus-the-demo-flow)
+3. [Project status](#project-status)
+4. [How it works](#how-it-works)
+5. [Project structure](#project-structure)
+6. [Data sources and calculation methods](#data-sources-and-calculation-methods)
+7. [Storage and database design](#storage-and-database-design)
+8. [Configuration](#configuration)
+9. [Testing](#testing)
+10. [Deploying to AWS](#deploying-to-aws)
+11. [Known limitations](#known-limitations)
+12. [Team and contributions](#team-and-contributions)
+
+---
+
+## Quick start (Codespaces)
+
+From the repository folder in a terminal:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-```
-
-3. Run the Streamlit app:
-
-```bash
+pip install -r requirements.txt
 python3 -m streamlit run src/app.py
 ```
 
-4. Enter a stock ticker, choose an analysis type, and click Run.
+Codespaces then offers to open port 8501. Make the port **Public** if asked,
+then choose **Open in Browser**.
 
-If you are using VS Code or Codespaces, you can also open the notebook files directly and run them from there.
+`src/app.py` is the only application entry point. The app needs internet
+access because it retrieves live data from Yahoo Finance.
 
-## Streamlit App
+The notebooks in `notebooks/` are the original prototypes. To run them, also
+install Jupyter support: `pip install jupyter ipykernel`.
 
-This project includes a beginner-friendly Streamlit interface in `src/app.py`.
+---
 
-- `src/app.py` contains the user interface and button logic
-- `src/analysis.py` contains the reusable finance helper functions extracted from the notebooks
+## Using Nimbus: the demo flow
 
-The app supports:
+1. **New briefing:** enter two or more tickers (e.g. `AAPL, MSFT`), choose a
+   share-price period and select **Generate briefing**.
+2. **📊 Company comparison:** growth rates, margins and ratios side by side,
+   plus a share-price chart where every company starts at 100.
+3. **📑 Financials:** annual statement line items, formatted in millions,
+   billions or trillions.
+4. **📰 News & ratings:** analyst recommendation counts and recent news, each
+   with publisher, date, summary and a link to the source.
+5. **📝 RM notes & save:** fill in the meeting note, then select **Save
+   briefing and RM notes**. Each briefing can be saved once.
+6. **🗂️ Briefing history:** filter by ticker, date range, client reference or
+   analysis type; choose a result and select **Open briefing**. The reopened
+   briefing is labelled as a historical snapshot and is never refreshed.
 
-- filings analysis
-- news analysis
-- stock price ratings analysis
-- saving an analysis as a Markdown file and viewing saved analyses
+---
 
-### Saving and viewing previous analyses
+## Project status
 
-After running an analysis, select **Save Analysis** to write it as a Markdown
-file. Saved analyses include the ticker, analysis type, selected parameters,
-creation date, and results. Use **Previous Analyses** on the homepage to browse
-saved files (newest first). Select an analysis and click **Show** to open it in
-a pop-up; selecting it from the dropdown alone does not display its contents.
+Features are those agreed in the Lesson 4 Feature Request Workshop. Marking
+criteria are from the Lesson 5 slides.
 
-The app creates an `analyses-data/` folder at the project root when needed.
-Its location is resolved from the app code, so the same commands and storage
-behavior work in GitHub Codespaces and on EC2:
+| # | Feature | What Nimbus does | Status |
+|---|---|---|---|
+| 1 | Unified UI | One app combining financials, news and price/ratings; numbers formatted ($416.16B, 12.3%); news shows summary, publisher, date and source link | ✅ Working locally |
+| 2 | Company comparison | Two or more companies; revenue and net-income growth, net margin, return on assets, debt-to-assets, P/E, market cap; rebased share-price chart and holding-period return | ✅ Working locally |
+| 3 | Storage: save analysis | Complete briefing saved as a Markdown file (plus JSON snapshot) in `analyses-data/`; listed and reopened without re-downloading | ✅ Working locally; on EC2 the folder is on the instance's EBS volume |
+| 4 | Storage: RM notes | Structured meeting note saved with, and linked to, its briefing | ✅ Working locally |
+| 5 | Database search | Metadata in SQL tables; search by ticker, date range, client reference, analysis type; open the matching briefing | ✅ Working with SQLite. ⏳ Amazon RDS not yet deployed |
+| 6 | Scaling | Automatically add and remove capacity | ⏳ Not started (taught in Week 9) |
 
-```bash
-python3 -m streamlit run src/app.py
+| Marking area | Where to look |
+|---|---|
+| Repo completeness | This README, `requirements.txt`, `.gitignore`, `.env.example`, `tests/`, `scripts/` |
+| Features & functionality | Table above; acceptance test in `tests/test_app_workflow.py` |
+| Cloud hosting | [Deploying to AWS](#deploying-to-aws) |
+
+---
+
+## How it works
+
+```mermaid
+flowchart LR
+    RM([RM in a browser]) --> UI[src/app.py<br/>Streamlit UI]
+    UI -->|tickers, period| B[services/briefing_builder.py]
+    B -->|cached 15 min| Y[services/yahoo.py] --> YF[(Yahoo Finance<br/>via yfinance)]
+    B --> A[analytics/<br/>ratios, performance]
+    UI -->|Save briefing + note| S[storage/briefing_store.py]
+    S --> F[(analyses-data/<br/>.md + .json files<br/>EBS on AWS)]
+    S --> D[(SQL metadata<br/>SQLite now, RDS later)]
+    UI -->|Search history| D
+    UI -->|Open briefing| F
 ```
 
-To verify the feature in either environment:
+**Generate.** `briefing_builder` fetches prices and company data per ticker.
+Results are cached for 15 minutes, so changing other widgets never calls
+Yahoo again. If one ticker fails it is reported, and the others continue.
 
-1. Run the command above and create an analysis, for example for `AAPL`.
-2. Select **Save Analysis** and confirm the success message.
-3. Confirm a `.md` file appears in `analyses-data/` at the project root. This
-   folder is intentionally excluded from Git.
-4. Refresh or rerun the app, select the saved analysis in **Previous
-   Analyses**, and click **Show** to view it in a pop-up.
+**Compare.** `analytics/` computes normalized measures. Missing inputs give
+N/A, never zero.
 
-Each environment stores files on its existing project filesystem; files saved
-in Codespaces are not automatically copied to EC2, and vice versa. EC2 uses
-the instance's existing disk—no additional volume or CloudFormation changes
-are required.
+**Save.** The briefing and note are written first to two files, then to the
+database in one transaction. If the database write fails, the files are
+removed, so file storage and database never disagree. Saving the same
+briefing twice is refused.
 
-## Code Walkthrough
+**Search and reopen.** SQL queries on the metadata find the briefing. The app
+then reads its JSON snapshot. Reopening never contacts Yahoo.
 
-This repository is a beginner starter for a financial data app. It is organized around notebooks that collect data, clean it, and prepare it for analysis.
+---
 
-- `README.md` — project overview and course context.
-- `lessons/` — step-by-step course material and guidance.
-- `requirements.txt` — the Python packages this project needs, such as `yfinance`, `pandas`, and `streamlit`.
-- `notebooks/` — the main analysis work happens here.
+## Project structure
 
-Important notebook files:
+```text
+.
+├── src/
+│   ├── app.py                    # Streamlit UI: the only entry point
+│   ├── config.py                 # settings read from environment variables
+│   ├── models/briefing.py        # Briefing, CompanySnapshot, NewsItem, RmNote
+│   ├── services/
+│   │   ├── yahoo.py              # all yfinance calls and parsing (from the notebooks)
+│   │   └── briefing_builder.py   # combines several companies into one briefing
+│   ├── analytics/
+│   │   ├── ratios.py             # growth rates and financial ratios
+│   │   ├── performance.py        # rebased prices, holding-period return
+│   │   └── formatting.py         # $M/$B, percentages, N/A
+│   └── storage/
+│       ├── snapshots.py          # Markdown + JSON files in analyses-data/
+│       ├── database.py           # SQL schema, insert, search (SQLite or RDS)
+│       └── briefing_store.py     # save once / reopen, keeping files and DB in step
+├── tests/                        # pytest: calculations, parsing, storage, full UI workflow
+├── notebooks/                    # original notebooks (unchanged)
+├── scripts/                      # CloudFormation templates from Lessons 6–7
+├── lessons/                      # course lesson notes
+├── requirements.txt              # app dependencies
+├── requirements-dev.txt          # + pytest
+├── .env.example                  # configuration variable names (no secrets)
+└── .gitignore                    # excludes .venv/, analyses-data/, *.db, .env
+```
 
-- `notebooks/filings.ipynb` — looks at company filings and financial information.
-- `notebooks/news.ipynb` — gathers news or market-related data and helps explore trends.
-- `notebooks/stock_price_ratings.ipynb` — pulls stock prices and rating data to compare performance.
+`src/analysis.py` and `src/analysis_storage.py` from the Lesson 5–7 version
+were replaced by `services/yahoo.py` and `storage/snapshots.py`. They remain
+in the Git history on `main`.
 
-How the application works from start to finish:
+---
 
-1. A user opens a notebook in Jupyter.
-2. The notebook imports Python libraries and fetches financial data using APIs or package tools such as `yfinance`.
-3. The data is loaded into a pandas table, cleaned, and organized.
-4. Charts or summaries are created to help explain trends and insights.
-5. The results can later be expanded into a Streamlit web app or a cloud-hosted dashboard.
+## Data sources and calculation methods
 
-This repo is the foundation for building a simple financial analytics application that turns raw data into usable insight.
+**Source.** All data comes from Yahoo Finance through the `yfinance` package:
+daily adjusted prices, annual income statement, balance sheet and cash flow,
+market cap, trailing P/E, analyst recommendation counts and news. Every saved
+company records its source, a link to its Yahoo quote page and the time it
+was retrieved. Every news item keeps its own publisher, publication date and
+source link. Nimbus never writes its own news summaries or links: if Yahoo
+gives none, the app says so.
 
- # Cloud Computing for Economics: Starter Repo 
+**Measures** (FY = latest fiscal year, FY−1 = the previous one):
 
-  This repository contains the starter code and lesson materials for building a Python financial-data application and deploying it to AWS.
+| Measure | Formula |
+|---|---|
+| Revenue growth | Revenue(FY) ÷ Revenue(FY−1) − 1 |
+| Net income growth | Net income(FY) ÷ Net income(FY−1) − 1; N/A if FY−1 is zero or negative |
+| Net profit margin | Net income(FY) ÷ Revenue(FY) |
+| Return on assets | Net income(FY) ÷ Total assets at FY year-end |
+| Debt-to-assets | Total debt ÷ Total assets at FY year-end |
+| P/E (trailing), market cap | As reported by Yahoo at retrieval time; a negative P/E shows N/A |
+| Rebased share price | Adjusted close ÷ adjusted close on the first common date × 100 |
+| Holding-period return | Last ÷ first adjusted close − 1, over dates every company traded |
 
-  Students will use GitHub Codespaces, Python, Jupyter notebooks, Streamlit, Git, and AWS CloudFormation.
+**Rules.**
+- A measure is N/A when an input is missing or a denominator is zero or negative.
+- Balance-sheet values are only combined with income-statement values from the same fiscal year-end.
+- Companies may have different fiscal year-ends; the comparison table shows which year each uses.
+- Adjusted prices include dividends and splits.
+- All measures are historical, not forecasts.
 
-  ## Learning outcomes
+---
 
-  By the end of the course, you will be able to:
+## Storage and database design
 
-   1.  Build and deploy an analytics application with a simple Front End / back-end (using AI)
-   2.  Host and share the application on a cloud platform (e.g., AWS EC2 or similar) so that others can access it securely over the web
-   3.  Integrate data sources and APIs into the app to enable interactive, real-time analytics
-   4.  Apply cloud architecture best practices, ensuring the app demonstrates scalability, performance efficiency, and basic security
-   5.  Showcase your work on GitHub as part of a personal portfolio, demonstrating practical cloud and analytics skills through a shareable, explorable repository
+This follows the course design:
+- **Lesson 7:** save the analysis as a Markdown file on disk, which is EBS on AWS.
+- **Lesson 8:** save metadata about each file in a database and search it with SQL instead of guessing filenames.
 
-  
-  ## Repository structure
+**Files** (`analyses-data/`, excluded from Git):
+- `AAPL-MSFT__company-briefing__20261024T130501Z__1a2b3c4d.md`: readable briefing, downloadable from the app.
+- The matching `.json` file: the exact snapshot used to reopen the briefing.
 
-  ```text
-  .
-  ├── lessons/          # Step-by-step course instructions
-  ├── notebooks/        # Starter financial-data notebooks
-  ├── requirements.txt  # Python dependencies
-  └── README.md         # Course overview
+**Tables:**
+
+| Table | Columns | Purpose |
+|---|---|---|
+| `briefings` | `briefing_id` (PK, UUID), `created_at`, `saved_at`, `analysis_date`, `analysis_type`, `analysis_period`, `client_reference`, `tickers`, `filename`, `json_filename`, `schema_version`, `app_version` | One row per saved briefing |
+| `briefing_tickers` | `id` (PK), `briefing_id` (FK), `ticker` | One row per company in a briefing |
+| `rm_notes` | `note_id` (PK), `briefing_id` (FK, unique), `meeting_date`, `next_review_date`, `discussion_summary`, `client_priorities`, `follow_up_actions`, `free_text`, `created_at` | The RM's meeting note |
+
+Joining `briefings` and `briefing_tickers` gives the Lesson 8 example table
+(`ticker`, `analysis_type`, `date`, `filename`). For example, every briefing
+that includes Micron:
+
+```sql
+SELECT b.saved_at, b.tickers, b.client_reference, b.filename
+FROM briefings b
+WHERE b.briefing_id IN (SELECT briefing_id FROM briefing_tickers WHERE ticker = 'MU')
+ORDER BY b.saved_at DESC;
+```
+
+Tables are created automatically on first run. The code uses SQLAlchemy, so
+the same queries run on SQLite now and on RDS for MySQL later.
+
+---
+
+## Configuration
+
+Nimbus reads environment variables; see `.env.example` for the names. With
+nothing set, it uses `analyses-data/` and a SQLite file inside it.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `NIMBUS_DATA_DIR` | `<repo>/analyses-data` | Where briefing files are written |
+| `NIMBUS_DATABASE_URL` | `sqlite:///<repo>/analyses-data/nimbus.db` | Metadata database; for RDS: `mysql+pymysql://<user>:<password>@<endpoint>:3306/<db>` |
+
+Never commit real credentials. `.env` files are ignored by Git.
+
+---
+
+## Testing
+
+**Automated tests.** These need no internet; Yahoo is replaced by
+`tests/fake_yahoo.py`:
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+They cover:
+- formatting, ratio and return calculations, including N/A cases;
+- news and statement parsing;
+- saving exactly once;
+- rollback when the database fails;
+- search filters;
+- reopening without calling Yahoo;
+- `tests/test_app_workflow.py`, which drives the real Streamlit app through
+  the full acceptance workflow: generate → compare → note → save → search →
+  reopen → restart → reopen → invalid ticker.
+
+Verified on Python 3.13 (Streamlit 1.66, pandas 3.1) and Python 3.9 (Streamlit
+1.50, pandas 2.3). Python 3.9 is the version on Amazon Linux 2023.
+
+**Manual check with live data** (run in Codespaces before every demo):
+
+1. Fresh venv, `pip install -r requirements.txt`, start the app.
+2. Enter `AAPL, MSFT`, generate.
+3. Check the chart, comparison table and formatted financials.
+4. Check that news shows links, publishers and dates.
+5. Enter a note and save. The save button disappears and the filename is shown.
+6. In Briefing history, the caption shows 1 briefing, 2 ticker records and 1 RM note.
+7. Search `MSFT`, then open the briefing. It shows the snapshot banner and your note.
+8. Stop the app (Ctrl+C), start it again, then search and open again.
+9. Generate `AAPL, ZZZZ, MSFT`. ZZZZ is reported and the others still load.
+
+---
+
+## Deploying to AWS
+
+`scripts/lesson5-nimbus.yaml` is the Lesson 7 CloudFormation template. It
+creates a VPC, public subnet, internet gateway, security group and an EC2
+instance whose user data clones this repository, installs
+`requirements.txt` and runs `src/app.py` on port 8501.
+
+1. Push your changes to GitHub. EC2 clones from GitHub, not from Codespaces.
+2. In the AWS Sandbox open **CloudFormation → Create stack → Upload a
+   template file**, and choose `scripts/lesson5-nimbus.yaml`.
+3. Set **GitHubRepoUrl** to this repository's `.git` URL.
+4. When the stack shows `CREATE_COMPLETE`, wait a few minutes for the install.
+   Then open the **StreamlitUrl** output, using `http://`, not `https://`.
+5. If the page does not load: **EC2 → instance → Actions → Monitor and
+   troubleshoot → Get system log**.
+
+**What this deploys today:** the full prototype on one EC2 instance, with
+briefing files and SQLite on the instance's EBS root volume. This meets the
+"hosted on AWS" stage, but **not** yet the Lesson 8 RDS design or Feature 6.
+
+**Next stages:**
+- Add RDS (private subnets, reachable only from the EC2 security group) to the template, and pass `NIMBUS_DATABASE_URL` to the app.
+- Add scaling resources per the Week 9 lesson.
+
+---
+
+## Known limitations
+
+- **Yahoo Finance via yfinance** is an unofficial interface. Fields can be
+  missing or change format; Nimbus shows N/A or "not provided" rather than
+  guessing. Statement coverage is usually the last four fiscal years.
+- **News** is the latest available at retrieval time; Yahoo does not provide
+  historical news searches.
+- **Ratios** use annual statements only (no quarterly or trailing-twelve-month
+  figures).
+- **Files are local to one machine.** Briefings saved in Codespaces and on EC2
+  are separate. With auto scaling (several EC2 instances), a briefing saved on
+  one instance's disk would not be readable from another. The storage design
+  must be revisited for Feature 6.
+- **No user accounts:** everyone using an instance sees the same history.
+- **Analysis type** is always `company_briefing` in this version; the filter
+  exists so other analysis types can be added later.
+
+---
+
+## Team and contributions
+
+| Member | Responsibilities | Main contributions |
+|---|---|---|
+| _Name_ | _e.g. data layer, calculations_ | _to be completed by the team_ |
+| _Name_ | _e.g. UI, storage, database_ | _to be completed by the team_ |
+| _Name_ | _e.g. CloudFormation, AWS deployment_ | _to be completed by the team_ |
+
+Course: SMU DS600 Cloud Computing for Economics. Starter repository and lessons
+by Gaurav Chaturvedi.
