@@ -95,7 +95,7 @@ def build_briefing(
             raw = fetch_company(ticker)
         except Exception as exc:
             raw = {"warnings": [f"Company details unavailable: {exc}"]}
-        companies.append(build_company_snapshot(ticker, closes, raw, utc_now_iso()))
+        companies.append(build_company_snapshot(ticker, closes, raw, raw.get("retrieved_at") or utc_now_iso()))
         prices[ticker] = closes
 
     aligned = align_prices(prices)

@@ -38,6 +38,8 @@ from config import (
     DEFAULT_PERIOD_LABEL,
     database_url,
     describe_database_url,
+    timezone_label,
+    to_local,
 )
 from models.briefing import ANALYSIS_TYPE, Briefing, RmNote
 from services import yahoo
@@ -296,7 +298,7 @@ def render_analyst_view(briefing: Briefing) -> None:
         st.altair_chart(chart)
     st.dataframe(tables.analyst_frame(briefing), hide_index=True, column_config=tables.analyst_columns())
     st.caption("Third-party analyst views from Yahoo Finance at retrieval time, not Nimbus recommendations. "
-               "Blank = not reported.")
+               "“None” = not reported by Yahoo.")
 
 
 def render_earnings(briefing: Briefing) -> None:
@@ -304,7 +306,7 @@ def render_earnings(briefing: Briefing) -> None:
     st.dataframe(tables.earnings_frame(briefing), hide_index=True, column_config=tables.earnings_columns())
     unusual = [c.ticker for c in briefing.companies
                if tables.surprise_is_unusual((c.earnings or {}).get("last_surprise"))]
-    st.caption("Scheduled dates can change. Blank = not reported."
+    st.caption("Scheduled dates can change. “None” = not reported by Yahoo."
                + (f" ⚠ {', '.join(unusual)}: surprise over 100%; reported EPS may include one-off items."
                   if unusual else ""))
 
@@ -318,15 +320,18 @@ def render_financials(briefing: Briefing) -> None:
             html_block(f'<div class="nb-card-title">{esc(company.name)} {chip(company.ticker)}</div>')
             if company.financials:
                 years = sorted({y for values in company.financials.values() for y in values}, reverse=True)
+                # Every standard line item is listed, so an item Yahoo does not report shows as N/A
+                # instead of silently disappearing.
+                items = list(dict.fromkeys([*yahoo.STATEMENT_ITEMS, *company.financials]))
                 table = pd.DataFrame(
                     {
                         f"FY {format_date(y)}": [
-                            format_money(company.financials[item].get(y), company.financial_currency)
-                            for item in company.financials
+                            format_money(company.financials.get(item, {}).get(y), company.financial_currency)
+                            for item in items
                         ]
                         for y in years
                     },
-                    index=list(company.financials),
+                    index=items,
                 )
                 st.table(table)
             else:
@@ -482,7 +487,8 @@ def sidebar() -> None:
             recent = []
             st.caption("⚠️ Saved briefings are unavailable: the database cannot be reached.")
         for row in recent:
-            label = f"{row['tickers']} · {row['saved_at'].day} {row['saved_at'].strftime('%b %H:%M')}"
+            saved = to_local(row["saved_at"])
+            label = f"{row['tickers']} · {saved.day} {saved.strftime('%b %H:%M')}"
             st.button(label, key=f"recent_{row['briefing_id']}", on_click=open_from_sidebar,
                       args=(row["briefing_id"],), help=row["client_reference"] or None, width="stretch")
 
@@ -575,23 +581,27 @@ def generate_section() -> None:
                                             help="Period for the share-price chart and returns")
         clicked = button_col.button("Generate briefing", type="primary", width="content")
 
-    if not clicked:
-        return
-    tickers = list(st.session_state["selected_tickers"])
-    if len(tickers) < 2:
-        st.error("Add at least two companies to generate a comparison briefing.")
-        return
-    with st.spinner(f"Retrieving {', '.join(tickers)} from Yahoo Finance…"):
-        briefing = build_briefing(
-            tickers,
-            period_label,
-            ANALYSIS_PERIODS[period_label],
-            fetch_history=cached_price_history,
-            fetch_company=cached_company_data,
-        )
-    st.session_state["briefing"] = briefing
-    if not briefing.companies:
-        st.error("None of the companies could be retrieved. Check the symbols and try again.")
+    # The spinner and errors go in a container that exists on every run. If they were placed
+    # directly on the page, the number of elements above the tabs would change between runs,
+    # and Streamlit 1.50 (EC2) would then reset the tabs to Compare and drop half-typed notes.
+    with st.container():
+        if not clicked:
+            return
+        tickers = list(st.session_state["selected_tickers"])
+        if len(tickers) < 2:
+            st.error("Add at least two companies to generate a comparison briefing.")
+            return
+        with st.spinner(f"Retrieving {', '.join(tickers)} from Yahoo Finance…"):
+            briefing = build_briefing(
+                tickers,
+                period_label,
+                ANALYSIS_PERIODS[period_label],
+                fetch_history=cached_price_history,
+                fetch_company=cached_company_data,
+            )
+        st.session_state["briefing"] = briefing
+        if not briefing.companies:
+            st.error("None of the companies could be retrieved. Check the symbols and try again.")
 
 
 def pinned_articles(briefing: Briefing) -> List[Dict[str, Optional[str]]]:
@@ -703,12 +713,25 @@ def note_dialog(briefing: Briefing) -> None:
                               args=(briefing,))
 
 
+def data_retrieved_at(briefing: Briefing) -> str:
+    """When Yahoo was actually asked for the oldest company data in the briefing.
+
+    Retrieved data is reused for CACHE_TTL_SECONDS, so this can be earlier than the
+    briefing's generation time (created_at)."""
+    times = [company.retrieved_at for company in briefing.companies if company.retrieved_at]
+    return min(times) if times else briefing.created_at
+
+
 def briefing_header(briefing: Briefing) -> None:
     """Summary line, saved/unsaved indicator and a Save button that is visible from every tab."""
     saved = st.session_state["saved"].get(briefing.briefing_id)
     info_col, status_col, button_col = st.columns([5, 1.2, 1.6], vertical_alignment="center")
-    info_col.caption(f"Briefing for {', '.join(briefing.successful_tickers)} · generated "
-                     f"{format_timestamp(briefing.created_at)} · price period {briefing.analysis_period}")
+    retrieved = data_retrieved_at(briefing)
+    when = f"generated {format_timestamp(briefing.created_at)}"
+    if format_timestamp(retrieved) != format_timestamp(briefing.created_at):
+        when += f" from data retrieved {format_timestamp(retrieved)}"
+    info_col.caption(f"Briefing for {', '.join(briefing.successful_tickers)} · {when} · "
+                     f"price period {briefing.analysis_period}")
     if saved:
         status_col.markdown(chip("✓ Saved", "up", tooltip=saved), unsafe_allow_html=True)
     else:
@@ -777,11 +800,15 @@ def history_section() -> None:
     with st.form("history_search_form"):
         c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 2, 1])
         ticker = c1.text_input("Ticker", placeholder="e.g. MU")
-        date_from = c2.date_input("Saved from", value=None)
-        date_to = c3.date_input("Saved to", value=None)
+        date_from = c2.date_input(f"Saved from ({timezone_label()})", value=None)
+        date_to = c3.date_input(f"Saved to ({timezone_label()})", value=None)
         client_reference = c4.text_input("Client / briefing reference contains")
         analysis_type = c5.selectbox("Analysis type", ["All", ANALYSIS_TYPE])
-        if st.form_submit_button("Search"):
+        submitted = st.form_submit_button("Search")
+    if submitted:
+        if date_from and date_to and date_from > date_to:
+            st.error("“Saved from” is after “Saved to”. Swap the dates and search again.")
+        else:
             st.session_state["history_filters"] = {
                 "ticker": ticker,
                 "date_from": date_from,
@@ -807,7 +834,7 @@ def history_section() -> None:
             pd.DataFrame(
                 [
                     {
-                        "Saved (UTC)": row["saved_at"].strftime("%Y-%m-%d %H:%M"),
+                        f"Saved ({timezone_label()})": to_local(row["saved_at"]).strftime("%Y-%m-%d %H:%M"),
                         "Companies": row["tickers"],
                         "Client / reference": row["client_reference"] or "",
                         "Type": row["analysis_type"],
@@ -820,12 +847,17 @@ def history_section() -> None:
             hide_index=True,
         )
         labels = {
-            row["briefing_id"]: f"{row['saved_at'].strftime('%Y-%m-%d %H:%M')} · {row['tickers']} · "
+            row["briefing_id"]: f"{to_local(row['saved_at']).strftime('%Y-%m-%d %H:%M')} · {row['tickers']} · "
             f"{row['client_reference'] or 'no reference'}"
             for row in results
         }
+        options = list(labels)
         left, right = st.columns([4, 1], vertical_alignment="bottom")
-        chosen = left.selectbox("Choose a saved briefing", list(labels), format_func=labels.get)
+        # Show the briefing that is open below (e.g. opened from the sidebar), so the selector and
+        # the page never disagree. Keyed by the open briefing so the default follows it.
+        chosen = left.selectbox("Choose a saved briefing", options, format_func=labels.get,
+                                index=options.index(open_id) if open_id in options else 0,
+                                key=f"history_choice_{open_id or 'none'}")
         if right.button("Open briefing"):
             st.session_state["open_briefing_id"] = chosen
             open_id = chosen
@@ -856,7 +888,7 @@ def render_historical(briefing_id: str) -> None:
         right.caption("Markdown file not available on this machine.")
     st.info(
         f"📁 **Historical snapshot.** Saved {format_timestamp(briefing.saved_at)}; data retrieved "
-        f"{format_timestamp(briefing.created_at)}. These figures are exactly as saved; Nimbus has not "
+        f"{format_timestamp(data_retrieved_at(briefing))}. These figures are exactly as saved; Nimbus has not "
         "retrieved current data."
     )
     render_notices(briefing)
@@ -883,10 +915,13 @@ def main() -> None:
     generate_section()
 
     briefing: Optional[Briefing] = st.session_state.get("briefing")
-    if briefing is not None:
-        render_notices(briefing)
-        if briefing.companies:
-            briefing_header(briefing)
+    # Same reason as in generate_section: one container on every run, whatever it holds
+    # (notices, the saved/unsaved header, the save dialog), keeps the tabs from resetting.
+    with st.container():
+        if briefing is not None:
+            render_notices(briefing)
+            if briefing.companies:
+                briefing_header(briefing)
 
     toast = st.session_state.pop("toast", None)
     if toast:

@@ -424,3 +424,31 @@ def test_news_tab_uses_search_fallback_and_says_so():
     assert "AAPL: Yahoo's news feed was empty, so articles come from Yahoo search." in captions
     assert "Yahoo has no recent articles for MSFT." in captions
     assert any(b.label == "☆ Save to note" for b in app.button)
+
+
+def page_layout(app: AppTest):
+    """Types of the page's top-level elements, in order. The tabs come last."""
+    return [getattr(node, "type", type(node).__name__) for node in app.main.children.values()]
+
+
+def test_tabs_keep_their_place_between_runs(isolated_environment):
+    """Regression: Streamlit 1.50 (EC2) resets the tabs to Compare, and drops half-typed notes,
+    when the number of elements above the tabs changes between runs. QA saw this after
+    generating a briefing (the spinner), and the save dialog and errors could do the same."""
+    app = start_app()
+    before = page_layout(app)
+
+    add_companies(app, "AAPL")
+    button(app, "Generate briefing").click().run()  # error: needs two companies
+    assert page_layout(app) == before
+
+    generate(app, "MSFT")
+    after_generate = page_layout(app)
+    assert after_generate == before
+
+    text_input(app, "Client or briefing reference").set_value("Acme Q4").run()  # first note edit
+    assert page_layout(app) == after_generate
+
+    button(app, "💾 Save briefing").click().run()  # note incomplete: opens the save dialog
+    assert not app.exception, app.exception
+    assert page_layout(app) == after_generate

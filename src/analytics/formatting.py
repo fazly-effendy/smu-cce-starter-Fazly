@@ -60,16 +60,20 @@ def format_date(value: Optional[str]) -> str:
 
 
 def format_timestamp(value: Optional[str]) -> str:
-    """ISO date-time -> "24 Oct 2026, 13:05 UTC"."""
+    """ISO date-time -> "24 Oct 2026, 21:05 SGT", in the display time zone (NIMBUS_TIMEZONE).
+
+    Values without a time zone are treated as UTC, which is how Nimbus stores them.
+    """
+    from config import timezone_label, to_local
+
     if not value:
         return NOT_AVAILABLE
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return value
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(timezone.utc)
-    return f"{parsed.day} {parsed.strftime('%b %Y, %H:%M')} UTC"
+    local = to_local(parsed)
+    return f"{local.day} {local.strftime('%b %Y, %H:%M')} {timezone_label(parsed)}"
 
 
 def format_time_ago(value: Optional[str], now: Optional[datetime] = None) -> str:

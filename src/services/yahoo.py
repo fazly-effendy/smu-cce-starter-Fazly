@@ -44,6 +44,9 @@ CASHFLOW_ITEMS = {
     "Free cash flow": ["Free Cash Flow"],
 }
 
+# Every line item Nimbus shows, in display order. Items Yahoo does not report are shown as N/A.
+STATEMENT_ITEMS = [*INCOME_ITEMS, *BALANCE_ITEMS, *CASHFLOW_ITEMS]
+
 
 class TickerNotFoundError(ValueError):
     """Raised when Yahoo returns no price data for a ticker."""
@@ -112,12 +115,17 @@ def fetch_news(ticker: str, count: int = 10) -> dict:
         except Exception as exc:
             found = []
             problems.append(f"news search failed ({exc.__class__.__name__}: {exc})")
+        # Search results include general market stories; keep only those Yahoo links to this ticker.
         related = [a for a in found if isinstance(a, dict)
                    and ticker.upper() in [str(t).upper() for t in a.get("relatedTickers") or []]]
-        found = related or found
+        if related:
+            return {"items": related, "source": "Yahoo Finance search", "status": "ok",
+                    "message": "Yahoo's news feed returned nothing, so these articles come from Yahoo search "
+                               f"(only those Yahoo links to {ticker.upper()})."}
         if found:
-            return {"items": list(found), "source": "Yahoo Finance search", "status": "ok",
-                    "message": "Yahoo's news feed returned nothing, so these articles come from Yahoo search."}
+            return {"items": [], "source": None, "status": "empty",
+                    "message": f"Yahoo's news feed returned nothing, and Yahoo search returned {len(found)} "
+                               f"articles, none linked to {ticker.upper()}. They are not shown."}
     finally:
         logger.removeHandler(capture)
     problems += [f"yfinance: {message}" for message in capture.messages[:3]]
@@ -141,7 +149,9 @@ def search_quotes(query: str, max_results: int = 8) -> List[dict]:
 def fetch_company_data(ticker: str) -> dict:
     """Raw company data from Yahoo. Each part may independently be missing."""
     stock = yf.Ticker(ticker)
-    raw: dict = {"warnings": []}
+    # Record when Yahoo was actually asked: the app reuses this result for up to 15 minutes,
+    # so the briefing's generation time can be later than the data's retrieval time.
+    raw: dict = {"warnings": [], "retrieved_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     parts = {
         "info": lambda: stock.info,
         "income_statement": lambda: stock.income_stmt,

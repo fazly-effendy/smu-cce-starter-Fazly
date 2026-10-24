@@ -41,7 +41,7 @@ from sqlalchemy import (
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
-from config import database_url
+from config import database_url, to_local
 from models.briefing import Briefing
 
 metadata = MetaData()
@@ -52,7 +52,7 @@ briefings = Table(
     Column("briefing_id", String(36), primary_key=True),
     Column("created_at", DateTime, nullable=False),  # when the data was retrieved (UTC)
     Column("saved_at", DateTime, nullable=False),  # when the user saved it (UTC)
-    Column("analysis_date", Date, nullable=False, index=True),  # date used by search filters
+    Column("analysis_date", Date, nullable=False, index=True),  # local save date (NIMBUS_TIMEZONE), for search
     Column("analysis_type", String(32), nullable=False, index=True),
     Column("analysis_period", String(32), nullable=False),
     Column("client_reference", String(200), nullable=True, index=True),
@@ -149,7 +149,7 @@ def insert_briefing(
                     briefing_id=briefing.briefing_id,
                     created_at=_parse_dt(briefing.created_at),
                     saved_at=_parse_dt(briefing.saved_at or briefing.created_at),
-                    analysis_date=_parse_dt(briefing.saved_at or briefing.created_at).date(),
+                    analysis_date=to_local(_parse_dt(briefing.saved_at or briefing.created_at)).date(),
                     analysis_type=briefing.analysis_type,
                     analysis_period=briefing.analysis_period,
                     client_reference=(note.client_reference.strip() if note and note.client_reference else None),

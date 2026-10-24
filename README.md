@@ -8,7 +8,7 @@ search for it and reopen it exactly as it was.
 
 Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 
-> **Status (v0.8.0).** Features 1–5 work end to end in GitHub Codespaces
+> **Status (v0.9.0).** Features 1–5 work end to end in GitHub Codespaces
 > (SQLite and local files). On AWS, Stage 1 (VPC + EC2 via CloudFormation) has
 > been deployed in the Sandbox; Stage 2 adds Amazon RDS for MySQL and is ready
 > for its Sandbox run. Auto scaling (Feature 6) follows the Week 9 lesson; see
@@ -28,8 +28,9 @@ Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 8. [Configuration](#configuration)
 9. [Testing](#testing)
 10. [Deploying to AWS](#deploying-to-aws)
-11. [Known limitations](#known-limitations)
-12. [Team and contributions](#team-and-contributions)
+11. [QA findings (25 Oct 2026)](#qa-findings-25-oct-2026)
+12. [Known limitations](#known-limitations)
+13. [Team and contributions](#team-and-contributions)
 
 ---
 
@@ -270,6 +271,7 @@ nothing set, it uses `analyses-data/` and a SQLite file inside it.
 |---|---|---|
 | `NIMBUS_DATA_DIR` | `<repo>/analyses-data` | Where briefing files are written |
 | `NIMBUS_DATABASE_URL` | `sqlite:///<repo>/analyses-data/nimbus.db` | Metadata database; for RDS: `mysql+pymysql://<user>:<password>@<endpoint>:3306/<db>` |
+| `NIMBUS_TIMEZONE` | `Asia/Singapore` | Time zone for displayed times and for the "Saved from / to" search dates. Times are stored in UTC. |
 
 Never commit real credentials. `.env` files are ignored by Git.
 
@@ -294,7 +296,10 @@ They cover:
 - reopening without calling Yahoo;
 - `tests/test_app_workflow.py`, which drives the real Streamlit app through
   the full acceptance workflow: generate → compare → note → save → search →
-  reopen → restart → reopen → invalid ticker.
+  reopen → restart → reopen → invalid ticker;
+- `tests/test_qa_regressions.py`, one test per defect found in the QA run on
+  the AWS deployment (see [QA findings](#qa-findings-25-oct-2026)). Each was
+  checked to fail on the code before the fix.
 
 **Against MySQL.** The same suite can run against a MySQL database instead of
 SQLite (use an empty, throwaway database; its Nimbus tables are dropped before
@@ -304,7 +309,7 @@ each test):
 NIMBUS_TEST_DATABASE_URL='mysql+pymysql://<user>:<password>@127.0.0.1:3306/nimbus_test' python -m pytest
 ```
 
-All 88 tests pass on MariaDB 10.11 (MySQL-compatible) through PyMySQL.
+All 98 tests pass on MariaDB 10.11 (MySQL-compatible) through PyMySQL.
 `python scripts/check_database.py` checks that the configured database is
 reachable and its tables exist, printing only the host and row counts, never
 the password.
@@ -366,6 +371,29 @@ In short:
 `scripts/lesson5.yaml` and `scripts/lesson5-nimbus.yaml` are the course's
 Lesson 6–7 templates, kept for reference.
 
+## QA findings (25 Oct 2026)
+
+Four test briefings (run `AWS-QA-20261024T181839Z`) were created, saved,
+searched and reopened through the deployed app on AWS. Saving, reopening and
+search all matched the expected results. The defects found, and what was done:
+
+| Defect | Severity | Cause | Status |
+|---|---|---|---|
+| Typed note text lost; Notes tab jumps back to Compare | High | On Streamlit 1.50 (EC2), the tabs reset when the number of page elements above them changes between runs (the spinner after generating), dropping text not yet committed | ✅ Fixed: everything above the tabs sits in containers that exist on every run. Checked in a browser on 1.50 and 1.66 |
+| Unrelated news (Netflix, Nike) shown for NVDA | Medium | When the news feed is empty, the Yahoo search fallback fell back again to all search results | ✅ Fixed: only articles Yahoo links to the ticker; otherwise "no linked articles" is stated |
+| "Retrieved" time later than the real retrieval | Medium | Data is reused for 15 minutes, but the time shown was when the briefing was built | ✅ Fixed: each company records when Yahoo was called |
+| Date search in UTC: 25 Oct (Singapore) found nothing | Medium | Search used the UTC date | ✅ Fixed: local date (`NIMBUS_TIMEZONE`, default Singapore); all times shown in SGT |
+| "From" after "to" accepted silently | Low | No check | ✅ Fixed: error message |
+| Selector showed a different briefing from the open one | Medium | Selector always defaulted to the newest result | ✅ Fixed: follows the open briefing |
+| Missing statement item dropped (NVDA total liabilities) | Medium | Only reported items were listed | ✅ Fixed: every standard item listed, N/A if not reported |
+| Earnings table shows "None"; legend said "Blank" | Low | Streamlit shows missing values as "None" | ✅ Legend corrected |
+| Same article under two tickers | Low | The article is linked to both | Kept, and documented |
+| No load balancer; single server | Medium | Scaling is Stage 3 | ⏳ After the Week 9 lesson |
+| Database host shown in History | Low | Deliberate demo evidence | Kept (password never shown) |
+| No segment data (e.g. cloud) | Low | Not provided by Yahoo | Documented in limitations |
+
+The four QA briefings saved before the date fix keep their UTC search date.
+
 ## Known limitations
 
 - **Yahoo Finance via yfinance** is an unofficial interface. Fields can be
@@ -374,7 +402,14 @@ Lesson 6–7 templates, kept for reference.
 - **News** is the latest available at retrieval time; Yahoo does not provide
   historical news searches. yfinance's news feed returns an empty list rather
   than an error when Yahoo's news service misbehaves, so Nimbus then tries
-  Yahoo search and reports which source it used, or the real error.
+  Yahoo search and reports which source it used, or the real error. Search
+  results are kept only if Yahoo links them to the company's ticker, so a
+  company can show no news rather than unrelated stories. An article linked
+  to two companies in the briefing appears under both.
+- **Company-wide figures only.** Yahoo provides no segment data (for example
+  cloud revenue), so comparisons use whole-company statements.
+- **The History tab shows the database host** (never the password). This is
+  deliberate: it is the visible proof, for the demo, that search runs on RDS.
 - **Ratios** use annual statements only (no quarterly or trailing-twelve-month
   figures).
 - **Analyst targets and earnings dates** are third-party figures from Yahoo at

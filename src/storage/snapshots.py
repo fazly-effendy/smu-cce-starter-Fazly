@@ -30,6 +30,7 @@ from analytics.formatting import (
 from analytics.ratios import RATIO_LABELS
 from config import data_dir
 from models.briefing import Briefing
+from services.yahoo import STATEMENT_ITEMS
 
 
 def _filename_segment(value: str) -> str:
@@ -155,8 +156,9 @@ def briefing_markdown(briefing: Briefing) -> str:
             out += ["", "### Financial statements (annual)", ""]
             out.append(_table(
                 ["Line item"] + [f"FY {y}" for y in years],
-                [[item] + [format_money(values.get(y), company.financial_currency) for y in years]
-                 for item, values in company.financials.items()],
+                [[item] + [format_money(company.financials.get(item, {}).get(y), company.financial_currency)
+                           for y in years]
+                 for item in dict.fromkeys([*STATEMENT_ITEMS, *company.financials])],
             ))
         out += ["", "### Analyst ratings", ""]
         if company.ratings:

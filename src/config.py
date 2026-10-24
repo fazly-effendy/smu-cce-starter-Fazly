@@ -8,10 +8,12 @@ the instance environment) without edits. See .env.example.
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone, tzinfo
 from pathlib import Path
+from typing import Optional
 
 APP_NAME = "Nimbus"
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.9.0"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA_DIR = PROJECT_ROOT / "analyses-data"
@@ -33,6 +35,11 @@ CACHE_TTL_SECONDS = 15 * 60
 # Number of news items kept per company.
 NEWS_ITEMS_PER_TICKER = 5
 
+# Time zone for displayed times and for the date used by "Saved from / to" searches.
+# Times are always stored in UTC; only what users see and search by is local.
+DEFAULT_TIMEZONE = "Asia/Singapore"
+_TIMEZONE_LABELS = {"Asia/Singapore": "SGT", "UTC": "UTC", "Etc/UTC": "UTC"}
+
 
 def data_dir() -> Path:
     """Folder for briefing snapshot files (created on first use)."""
@@ -48,6 +55,36 @@ def database_url() -> str:
     if configured:
         return configured
     return f"sqlite:///{data_dir() / 'nimbus.db'}"
+
+
+def display_timezone() -> tzinfo:
+    """Time zone from NIMBUS_TIMEZONE (IANA name, default Asia/Singapore); UTC if unknown."""
+    name = os.environ.get("NIMBUS_TIMEZONE") or DEFAULT_TIMEZONE
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(name)
+    except Exception:  # unknown name, or no time zone data installed
+        return timezone.utc
+
+
+def timezone_label(moment: Optional[datetime] = None) -> str:
+    """Short label for the display time zone, e.g. "SGT" or "UTC+08"."""
+    tz = display_timezone()
+    name = getattr(tz, "key", None)
+    if name in _TIMEZONE_LABELS:
+        return _TIMEZONE_LABELS[name]
+    if tz is timezone.utc:
+        return "UTC"
+    abbreviation = (moment or datetime.now(timezone.utc)).astimezone(tz).tzname() or "local"
+    return f"UTC{abbreviation}" if abbreviation[:1] in "+-" else abbreviation
+
+
+def to_local(moment: datetime) -> datetime:
+    """UTC datetime (naive values are treated as UTC, as stored in the database) -> display time zone."""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(display_timezone())
 
 
 def describe_database_url(url: str) -> str:

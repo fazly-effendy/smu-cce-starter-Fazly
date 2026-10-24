@@ -29,6 +29,7 @@ def isolated_environment(tmp_path, monkeypatch):
     """Every test gets its own data folder and an empty database, and never touches Yahoo."""
     data_dir = tmp_path / "analyses-data"
     monkeypatch.setenv("NIMBUS_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("NIMBUS_TIMEZONE", "UTC")  # tests that need Singapore time set it themselves
     if TEST_DATABASE_URL:
         monkeypatch.setenv("NIMBUS_DATABASE_URL", TEST_DATABASE_URL)
         engine = create_engine(TEST_DATABASE_URL)
