@@ -37,8 +37,15 @@ def text_input(app: AppTest, label_start: str):
     return next(w for w in app.text_input if w.label.startswith(label_start))
 
 
+def add_companies(app: AppTest, text: str) -> AppTest:
+    """Type into the company search box and press Enter."""
+    text_input(app, "Find companies").set_value(text).run()
+    assert not app.exception, app.exception
+    return app
+
+
 def generate(app: AppTest, tickers: str) -> AppTest:
-    text_input(app, "Companies").set_value(tickers)
+    add_companies(app, tickers)
     button(app, "Generate briefing").click().run()
     assert not app.exception, app.exception
     return app
@@ -96,7 +103,7 @@ def test_acceptance_workflow(isolated_environment):
     app.text_input(key=f"ref_{key}").set_value("Acme Holdings Q4 review")
     app.text_area(key=f"summary_{key}").set_value("Discussed FY results and capex plans")
     app.text_area(key=f"actions_{key}").set_value("Send comparison deck by Friday")
-    calls_before_save = fake_yahoo.total_calls()
+    calls_before_save = fake_yahoo.data_calls()
 
     # Step 10: save exactly once
     button(app, "Save briefing and RM notes").click().run()
@@ -104,7 +111,7 @@ def test_acceptance_workflow(isolated_environment):
     assert any("saved as" in s.value for s in app.success)
     assert "Save briefing and RM notes" not in [b.label for b in app.button]  # cannot save again
     app.run()  # an extra rerun must not create a duplicate
-    assert fake_yahoo.total_calls() == calls_before_save  # saving does not refetch data
+    assert fake_yahoo.data_calls() == calls_before_save  # saving does not refetch data
 
     # Step 11: records exist in SQLite
     assert database.count_rows() == {"briefings": 1, "briefing_tickers": 2, "rm_notes": 1}
@@ -113,9 +120,9 @@ def test_acceptance_workflow(isolated_environment):
     assert (isolated_environment / row["filename"]).exists()
 
     # Steps 12-14: search by ticker, reopen, values match the snapshot, no new Yahoo calls
-    calls_before_reopen = fake_yahoo.total_calls()
+    calls_before_reopen = fake_yahoo.data_calls()
     search_and_open(app, "msft")
-    assert fake_yahoo.total_calls() == calls_before_reopen
+    assert fake_yahoo.data_calls() == calls_before_reopen
     assert any("Historical snapshot" in i.value for i in app.info)
     page_text = " ".join(m.value for m in app.markdown)
     assert "Discussed FY results and capex plans" in page_text
@@ -126,9 +133,9 @@ def test_acceptance_workflow(isolated_environment):
     # Steps 15-16: restart (new session, same database and files), search and reopen again
     restarted = start_app()
     assert restarted.session_state["briefing"] is None
-    calls_before_restart_reopen = fake_yahoo.total_calls()
+    calls_before_restart_reopen = fake_yahoo.data_calls()
     search_and_open(restarted, "AAPL")
-    assert fake_yahoo.total_calls() == calls_before_restart_reopen
+    assert fake_yahoo.data_calls() == calls_before_restart_reopen
     assert any("Historical snapshot" in i.value for i in restarted.info)
     assert "Acme Holdings Q4 review" in " ".join(m.value for m in restarted.markdown)
 
@@ -137,7 +144,7 @@ def test_invalid_ticker_is_reported_and_valid_ones_continue():
     # Step 17
     app = generate(start_app(), "AAPL, ZZZZ, MSFT")
     notice = [e for e in app.expander if "not included" in e.label]
-    assert len(notice) == 1 and "1 entry was not included" in notice[0].label
+    assert len(notice) == 1 and "1 company was not included" in notice[0].label
     assert "ZZZZ" in notice[0].markdown[0].value
     assert not app.warning  # one collapsible notice instead of stacked warning boxes
     assert app.session_state["briefing"].successful_tickers == ["AAPL", "MSFT"]
@@ -164,48 +171,87 @@ def test_note_requires_reference_and_summary():
 
 def test_typing_a_note_does_not_refetch_data():
     app = generate(start_app(), "AAPL, MSFT")
-    calls = fake_yahoo.total_calls()
+    calls = fake_yahoo.data_calls()
     key = app.session_state["briefing"].briefing_id
     app.text_area(key=f"summary_{key}").set_value("typing...")
     app.run()
     app.run()
-    assert fake_yahoo.total_calls() == calls
+    assert fake_yahoo.data_calls() == calls
 
 
 @pytest.mark.parametrize("tickers", ["AAPL, MSFT"])
 def test_regenerating_within_cache_window_reuses_data(tickers):
     app = generate(start_app(), tickers)
-    calls = fake_yahoo.total_calls()
+    calls = fake_yahoo.data_calls()
     button(app, "Generate briefing").click().run()
-    assert fake_yahoo.total_calls() == calls  # served from the 15-minute cache
+    assert fake_yahoo.data_calls() == calls  # served from the 15-minute cache
 
 
 def test_company_names_and_full_stop_separators_are_understood():
     app = generate(start_app(), "Apple . Microsoft")
     assert app.session_state["briefing"].successful_tickers == ["AAPL", "MSFT"]
-    assert any("Apple → **AAPL**" in c.value for c in app.caption)
 
 
-def test_misspelt_company_gets_a_suggestion():
-    app = generate(start_app(), "AAPL, MSFT, Microsft")  # misspelt: treated as a symbol, not found
-    notice = next(e for e in app.expander if "not included" in e.label)
-    assert "**MICROSFT**" in notice.markdown[0].value
-    assert "Did you mean **MSFT**?" in notice.markdown[0].value
+def test_misspelt_company_gets_one_short_message_with_suggestion():
+    app = add_companies(start_app(), "Microsft")
+    assert [w.value for w in app.warning] == [
+        "No company found for “Microsft”. Did you mean Microsoft Corporation (MSFT)?"]
+    button(app, "Add MSFT").click().run()
+    assert app.session_state["selected_tickers"] == ["MSFT"]
+    assert not app.warning
 
 
-def test_preview_badges_show_parsed_tickers_before_generating():
-    app = start_app()
-    text_input(app, "Companies").set_value("Apple, msft; Nvidia").run()
-    preview = next(m.value for m in app.markdown if m.value.startswith("Will compare:"))
-    assert ":blue-badge[AAPL]" in preview and ":blue-badge[MSFT]" in preview and ":blue-badge[NVDA]" in preview
-    assert app.session_state["briefing"] is None  # previewing does not retrieve any data
-    assert fake_yahoo.total_calls() == 0
+def test_partial_name_shows_matches_to_choose_from():
+    app = add_companies(start_app(), "nvid")
+    assert app.session_state["selected_tickers"] == []  # nothing added until the user chooses
+    assert any("NVIDIA Corporation" in m.value and "NASDAQ" in m.value for m in app.markdown)
+    next(b for b in app.button if b.key == "pick_0_NVDA").click().run()
+    assert app.session_state["selected_tickers"] == ["NVDA"]
+    assert app.session_state["companies"]["NVDA"].exchange == "NASDAQ"
 
 
-def test_quick_add_appends_a_ticker():
+def test_ambiguous_name_is_chosen_automatically_and_can_be_switched():
+    app = add_companies(start_app(), "Google")
+    assert app.session_state["selected_tickers"] == ["GOOGL"]
+    assert any("typed “Google”" in m.value for m in app.markdown)
+    switch = app.selectbox(key="switch_GOOGL")
+    switch.set_value("GOOG").run()
+    assert app.session_state["selected_tickers"] == ["GOOG"]
+    assert [m.ticker for m in app.session_state["alternatives"]["GOOG"]] == ["GOOGL"]
+
+
+def test_confirmation_row_before_generating_makes_no_data_calls():
+    app = add_companies(start_app(), "Apple, msft; Nvidia")
+    assert app.session_state["selected_tickers"] == ["AAPL", "MSFT", "NVDA"]
+    assert app.multiselect(key="selected_tickers").value == ["AAPL", "MSFT", "NVDA"]
+    assert any(m.value == ":blue-badge[NVDA]" for m in app.markdown)
+    assert app.session_state["briefing"] is None
+    assert fake_yahoo.data_calls() == 0  # only name searches so far, no market data
+
+
+def test_removing_a_chip_removes_the_company():
+    app = add_companies(start_app(), "AAPL, MSFT, NVDA")
+    app.multiselect(key="selected_tickers").unselect("MSFT").run()
+    assert app.session_state["selected_tickers"] == ["AAPL", "NVDA"]
+    app.multiselect(key="selected_tickers").unselect("AAPL").run()  # a second removal keeps the rest
+    assert app.session_state["selected_tickers"] == ["NVDA"]
+    add_companies(app, "Palantir")  # adding after removals keeps the existing selection
+    next(b for b in app.button if b.key == "pick_0_PLTR").click().run()
+    assert app.session_state["selected_tickers"] == ["NVDA", "PLTR"]
+    app.multiselect(key="selected_tickers").select("MSFT").run()  # removed companies can be re-added
+    assert app.session_state["selected_tickers"] == ["NVDA", "PLTR", "MSFT"]
+
+
+def test_quick_add_adds_a_company():
     app = start_app()
     next(b for b in app.button if b.key == "quick_NVDA").click().run()
-    assert app.session_state["ticker_text"] == "AAPL, MSFT, NVDA"
+    assert app.session_state["selected_tickers"] == ["NVDA"]
+
+
+def test_tickers_still_work_when_name_search_is_offline():
+    fake_yahoo.SEARCH_ONLINE = False
+    app = generate(start_app(), "AAPL, MSFT")
+    assert app.session_state["briefing"].successful_tickers == ["AAPL", "MSFT"]
 
 
 def test_single_company_shows_add_another_prompt():

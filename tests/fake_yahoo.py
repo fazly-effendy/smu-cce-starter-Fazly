@@ -129,9 +129,58 @@ class FakeTicker:
         return self._get("news", [])
 
 
+# Search results shaped like yfinance Search(...).quotes. Keys are lower-case queries.
+SEARCH_RESULTS = {
+    "palantir": [
+        {"symbol": "PTX.F", "longname": "Palantir Technologies Inc.", "quoteType": "EQUITY", "exchange": "FRA",
+         "exchDisp": "Frankfurt"},
+        {"symbol": "PLTR", "longname": "Palantir Technologies Inc.", "quoteType": "EQUITY", "exchange": "NMS",
+         "exchDisp": "NASDAQ"},
+        {"symbol": "PLTX", "shortname": "Palantir 2x ETF", "quoteType": "ETF", "exchange": "NMS",
+         "exchDisp": "NASDAQ"},
+    ],
+    "nvid": [
+        {"symbol": "NVDA", "longname": "NVIDIA Corporation", "quoteType": "EQUITY", "exchange": "NMS",
+         "exchDisp": "NASDAQ"},
+        {"symbol": "NVD.DE", "longname": "NVIDIA Corporation", "quoteType": "EQUITY", "exchange": "GER",
+         "exchDisp": "XETRA"},
+    ],
+    "meta": [
+        {"symbol": "META", "longname": "Meta Platforms, Inc.", "quoteType": "EQUITY", "exchange": "NMS",
+         "exchDisp": "NASDAQ"},
+        {"symbol": "MMAT", "longname": "Meta Materials Inc.", "quoteType": "EQUITY", "exchange": "PNK",
+         "exchDisp": "OTC Markets"},
+    ],
+    "aapl": [
+        {"symbol": "AAPL", "longname": "Apple Inc.", "quoteType": "EQUITY", "exchange": "NMS", "exchDisp": "NASDAQ"},
+    ],
+    "dbs group": [
+        {"symbol": "DBSDY", "longname": "DBS Group Holdings Ltd", "quoteType": "EQUITY", "exchange": "PNK",
+         "exchDisp": "OTC Markets"},
+        {"symbol": "D05.SI", "longname": "DBS Group Holdings Ltd", "quoteType": "EQUITY", "exchange": "SES",
+         "exchDisp": "Singapore"},
+    ],
+}
+SEARCH_ONLINE = True  # set to False in a test to simulate Yahoo being unreachable
+
+
+class FakeSearch:
+    def __init__(self, query, max_results=8, news_count=8, **kwargs):
+        CALLS[("search", query)] += 1
+        if not SEARCH_ONLINE:
+            raise ConnectionError("Yahoo search unreachable")
+        self.quotes = SEARCH_RESULTS.get(query.strip().lower(), [])[:max_results]
+
+
 class FakeYF:
     Ticker = FakeTicker
+    Search = FakeSearch
 
 
 def total_calls() -> int:
     return sum(CALLS.values())
+
+
+def data_calls() -> int:
+    """Calls that retrieve market data (searches excluded)."""
+    return sum(count for key, count in CALLS.items() if key[0] != "search")

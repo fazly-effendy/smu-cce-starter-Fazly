@@ -25,6 +25,7 @@ def isolated_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(yahoo, "yf", fake_yahoo.FakeYF)
     database._engines.clear()
     fake_yahoo.CALLS.clear()
+    fake_yahoo.SEARCH_ONLINE = True
     try:
         import streamlit as st
 

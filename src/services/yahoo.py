@@ -73,6 +73,17 @@ def fetch_price_history(ticker: str, period: str) -> pd.Series:
     return closes.astype(float)
 
 
+def search_quotes(query: str, max_results: int = 8) -> List[dict]:
+    """Yahoo Finance search results for a company name or ticker.
+
+    Each result is a dict with keys such as symbol, longname, shortname,
+    quoteType ("EQUITY", "ETF", ...), exchange (e.g. "NMS") and exchDisp
+    (e.g. "NASDAQ"). Raises if Yahoo cannot be reached.
+    """
+    results = yf.Search(query, max_results=max_results, news_count=0).quotes
+    return [dict(item) for item in results or [] if isinstance(item, dict)]
+
+
 def fetch_company_data(ticker: str) -> dict:
     """Raw company data from Yahoo. Each part may independently be missing."""
     stock = yf.Ticker(ticker)

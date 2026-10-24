@@ -8,7 +8,7 @@ search for it and reopen it exactly as it was.
 
 Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 
-> **Status (prototype v0.3.0, local).** Features 1–5 work end to end in
+> **Status (prototype v0.4.0, local).** Features 1–5 work end to end in
 > GitHub Codespaces using SQLite and local files. Moving the database to
 > Amazon RDS and adding auto scaling (Feature 6) are the next stages; see
 > [Project status](#project-status) and [Known limitations](#known-limitations).
@@ -56,11 +56,20 @@ install Jupyter support: `pip install jupyter ipykernel`.
 
 ## Using Nimbus: the demo flow
 
-1. **New briefing:** type tickers or company names (e.g. `Apple, Microsoft`
-   or `AAPL MSFT`), or use **Quick add** in the sidebar. Press Enter to see the
-   companies as badges, choose a share-price period and select **Generate
-   briefing**. Anything that could not be used is listed in one collapsible
-   notice, with a suggestion where possible.
+1. **New briefing:** in **Find companies**, type a company name or ticker and
+   press Enter (`nvidia`, `Google`, `MU`), or a list (`Apple, Microsoft, DBS`).
+   - Well-known names are added at once. For other names Nimbus searches Yahoo
+     Finance and lists the matches (e.g. *NVIDIA Corporation (NVDA) · NASDAQ*)
+     with an **Add** button.
+   - A misspelling gives one short message with a suggestion
+     ("No company found for “Microsft”. Did you mean Microsoft Corporation (MSFT)?").
+   - Chosen companies appear as chips (click × to remove) and in a check list
+     showing name, ticker and exchange. Where a name has several listings
+     (Google → GOOGL or GOOG), the list lets you switch.
+   - **Quick add** in the sidebar adds popular tickers. Up to 6 companies.
+
+   Then choose a share-price period and select **Generate briefing**. Any
+   company Yahoo cannot supply is listed in one collapsible notice.
 2. **📊 Compare:** a card per company (last close with period return, market
    cap, P/E), the financial comparison table, and an interactive share-price
    chart rebased to 100 (hover for date and actual price).
@@ -84,7 +93,7 @@ criteria are from the Lesson 5 slides.
 
 | # | Feature | What Nimbus does | Status |
 |---|---|---|---|
-| 1 | Unified UI | One app combining financials, news and price/ratings; numbers formatted ($416.16B, 12.3%); news shows summary, publisher, date and source link; accepts company names as well as tickers | ✅ Working locally |
+| 1 | Unified UI | One app combining financials, news and price/ratings; numbers formatted ($416.16B, 12.3%); news shows summary, publisher, date and source link; companies can be found by name or ticker | ✅ Working locally |
 | 2 | Company comparison | Two or more companies; revenue and net-income growth, net margin, return on assets, debt-to-assets, P/E, market cap; rebased share-price chart and holding-period return | ✅ Working locally |
 | 3 | Storage: save analysis | Complete briefing saved as a Markdown file (plus JSON snapshot) in `analyses-data/`; listed and reopened without re-downloading | ✅ Working locally; on EC2 the folder is on the instance's EBS volume |
 | 4 | Storage: RM notes | Structured meeting note saved with, and linked to, its briefing | ✅ Working locally |
@@ -141,7 +150,7 @@ then reads its JSON snapshot. Reopening never contacts Yahoo.
 │   ├── models/briefing.py        # Briefing, CompanySnapshot, NewsItem, RmNote
 │   ├── services/
 │   │   ├── yahoo.py              # all yfinance calls and parsing (from the notebooks)
-│   │   ├── ticker_input.py       # company names / separators -> ticker symbols
+│   │   ├── company_lookup.py     # resolve_company(): names/tickers -> ranked matches
 │   │   └── briefing_builder.py   # combines several companies into one briefing
 │   ├── analytics/
 │   │   ├── ratios.py             # growth rates and financial ratios
@@ -276,7 +285,9 @@ Linux 2023. Streamlit 1.44 or newer is required.
 **Manual check with live data** (run in Codespaces before every demo):
 
 1. Fresh venv, `pip install -r requirements.txt`, start the app.
-2. Enter `Apple, Microsoft`, press Enter (badges show AAPL and MSFT), generate.
+2. In Find companies type `nvid` and press Enter: NVIDIA (NVDA) · NASDAQ is
+   offered; add it. Then type `Apple, Microsoft` and press Enter. Check the
+   list shows names, tickers and exchanges, then generate.
 3. Check the chart, comparison table and formatted financials.
 4. Check that news shows links, publishers and dates.
 5. Enter a note and save. The save button disappears and the filename is shown.
@@ -329,9 +340,14 @@ briefing files and SQLite on the instance's EBS root volume. This meets the
 - **No user accounts:** everyone using an instance sees the same history.
 - **Analysis type** is always `company_briefing` in this version; the filter
   exists so other analysis types can be added later.
-- **Company-name lookup** uses a built-in list of about 90 well-known names
-  (US large caps and major SGX stocks). Other companies must be entered by
-  ticker; misspellings get a suggestion where one is close.
+- **Company search** runs when you press Enter, not on every keystroke
+  (true as-you-type search would need a third-party Streamlit component and a
+  Yahoo call per key press). Results are cached for a day.
+- **Name lookup** first checks a built-in list of about 90 well-known names
+  (US large caps, major SGX stocks), then Yahoo Finance search. Search results
+  are ranked by listing (US primary exchanges, then other primary exchanges,
+  then over-the-counter) and Yahoo's relevance, not by market capitalisation.
+  If Yahoo search is unreachable, ticker symbols still work.
 - **Windows:** keep the project outside Google Drive, OneDrive or Dropbox
   folders. Cloud-synced folders lock files and cause "Permission denied"
   errors (and can corrupt `.git`).

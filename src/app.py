@@ -40,7 +40,14 @@ from config import (
 from models.briefing import ANALYSIS_TYPE, Briefing, RmNote
 from services import yahoo
 from services.briefing_builder import build_briefing, utc_now_iso
-from services.ticker_input import MAX_TICKERS, ParsedInput, parse_ticker_input, suggest_ticker
+from services.company_lookup import (
+    MAX_COMPANIES,
+    CompanyMatch,
+    is_list,
+    resolve_company,
+    resolve_entries,
+    suggest_company,
+)
 from storage import briefing_store, database, snapshots
 
 st.set_page_config(page_title="Nimbus · Company briefings", page_icon="☁️", layout="wide")
@@ -75,6 +82,12 @@ def cached_company_data(ticker: str) -> dict:
     return yahoo.fetch_company_data(ticker)
 
 
+@st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
+def cached_search(query: str) -> list:
+    """Company-name search results, looked up at most once a day per query."""
+    return yahoo.search_quotes(query)
+
+
 # --------------------------------------------------------------------------
 # Small helpers
 # --------------------------------------------------------------------------
@@ -95,20 +108,100 @@ def badge(text: str, colour: str = "blue") -> str:
 
 def init_state() -> None:
     st.session_state.setdefault("briefing", None)  # the briefing currently on screen
-    st.session_state.setdefault("input_notes", None)  # how the ticker input was interpreted
     st.session_state.setdefault("saved", {})  # briefing_id -> saved filename
     st.session_state.setdefault("history_filters", {})
     st.session_state.setdefault("open_briefing_id", None)
-    st.session_state.setdefault("ticker_text", "AAPL, MSFT")
     st.session_state.setdefault("period_label", DEFAULT_PERIOD_LABEL)
+    # Company selection
+    st.session_state.setdefault("selected_tickers", [])  # tickers shown as removable chips
+    st.session_state.setdefault("companies", {})  # ticker -> CompanyMatch (name, exchange)
+    st.session_state.setdefault("alternatives", {})  # ticker -> other matches the user can switch to
+    st.session_state.setdefault("typed_as", {})  # ticker -> what the user typed, e.g. "Google"
+    st.session_state.setdefault("lookup_feedback", {})  # suggestions / not found, for the last search
 
 
-def add_ticker(ticker: str) -> None:
-    """Quick-add button callback: append a ticker to the input if not already there."""
-    current = st.session_state.get("ticker_text", "")
-    if ticker in parse_ticker_input(current, max_tickers=100).tickers:
+# --------------------------------------------------------------------------
+# Company selection callbacks (run before the page redraws)
+# --------------------------------------------------------------------------
+
+def _search(query: str) -> list:
+    return cached_search(query)
+
+
+def add_company(match: CompanyMatch, typed: Optional[str] = None,
+                alternatives: Optional[List[CompanyMatch]] = None) -> bool:
+    """Add a company to the selection. Returns False if it is already there or the list is full."""
+    selected = list(st.session_state["selected_tickers"])
+    if match.ticker in selected or len(selected) >= MAX_COMPANIES:
+        return False
+    st.session_state["selected_tickers"] = selected + [match.ticker]
+    st.session_state["companies"][match.ticker] = match
+    if typed and typed.strip().upper() != match.ticker:
+        st.session_state["typed_as"][match.ticker] = typed.strip()
+    if alternatives:
+        st.session_state["alternatives"][match.ticker] = list(alternatives)
+    return True
+
+
+def on_company_query() -> None:
+    """Runs when the user presses Enter in the search box."""
+    text = st.session_state.get("company_query", "").strip()
+    feedback: Dict[str, object] = {"query": text, "suggestions": [], "not_found": [], "over_limit": []}
+    if not text:
+        st.session_state["lookup_feedback"] = {}
         return
-    st.session_state["ticker_text"] = f"{current.rstrip(', ')}, {ticker}" if current.strip() else ticker
+    if len(st.session_state["selected_tickers"]) >= MAX_COMPANIES:
+        feedback["over_limit"] = [text]
+        st.session_state["lookup_feedback"] = feedback
+        return
+
+    matches = [] if is_list(text) else resolve_company(text, _search)
+    if is_list(text) or (not matches and " " in text):
+        resolution = resolve_entries(text, _search, already=st.session_state["selected_tickers"],
+                                     limit=MAX_COMPANIES)
+        for match in resolution.chosen:
+            add_company(match, resolution.typed_as.get(match.ticker), resolution.alternatives.get(match.ticker))
+        feedback["not_found"] = resolution.not_found
+        feedback["over_limit"] = resolution.over_limit
+        st.session_state["company_query"] = ""
+    elif not matches:
+        feedback["not_found"] = [(text, suggest_company(text))]
+    elif matches[0].source == "alias" or matches[0].ticker == text.upper() or len(matches) == 1:
+        if not add_company(matches[0], text, matches[1:]) and matches[0].ticker not in st.session_state["selected_tickers"]:
+            feedback["over_limit"] = [matches[0].ticker]
+        st.session_state["company_query"] = ""
+    else:
+        feedback["suggestions"] = matches  # several plausible companies: let the user pick
+    st.session_state["lookup_feedback"] = feedback
+
+
+def pick_suggestion(match: CompanyMatch, typed: str, others: List[CompanyMatch]) -> None:
+    add_company(match, typed, [o for o in others if o.ticker != match.ticker])
+    st.session_state["company_query"] = ""
+    st.session_state["lookup_feedback"] = {}
+
+
+def quick_add(ticker: str) -> None:
+    matches = resolve_company(ticker, _search)
+    best = next((m for m in matches if m.ticker == ticker), None) or CompanyMatch(ticker, ticker, None, "typed")
+    add_company(best)
+
+
+def switch_listing(old_ticker: str) -> None:
+    """Replace a chosen company with one of its alternative matches (e.g. GOOGL -> GOOG)."""
+    new_ticker = st.session_state.get(f"switch_{old_ticker}")
+    alternatives = st.session_state["alternatives"].get(old_ticker, [])
+    new = next((m for m in alternatives if m.ticker == new_ticker), None)
+    if new is None or new_ticker in st.session_state["selected_tickers"]:
+        return
+    old = st.session_state["companies"].get(old_ticker)
+    selected = list(st.session_state["selected_tickers"])
+    selected[selected.index(old_ticker)] = new.ticker
+    st.session_state["selected_tickers"] = selected
+    st.session_state["companies"][new.ticker] = new
+    st.session_state["alternatives"][new.ticker] = ([old] if old else []) + [m for m in alternatives if m.ticker != new.ticker]
+    if old_ticker in st.session_state["typed_as"]:
+        st.session_state["typed_as"][new.ticker] = st.session_state["typed_as"].pop(old_ticker)
 
 
 def open_from_sidebar(briefing_id: str) -> None:
@@ -121,27 +214,17 @@ def open_from_sidebar(briefing_id: str) -> None:
 # Rendering: used for both the live briefing and reopened historical ones
 # --------------------------------------------------------------------------
 
-def render_notices(briefing: Briefing, notes: Optional[ParsedInput]) -> None:
-    """One compact, collapsible notice instead of a stack of alert boxes."""
-    if notes and notes.mapped:
-        st.caption("Interpreted as: " + " · ".join(f"{md_text(typed)} → **{t}**" for typed, t in notes.mapped))
-
+def render_notices(briefing: Briefing) -> None:
+    """One compact, collapsible notice listing companies that could not be retrieved."""
     problems: List[str] = []
-    for entry in (notes.rejected if notes else []):
-        hint = suggest_ticker(entry)
-        problems.append(
-            f"**{md_text(entry)}** is not a ticker symbol or a company name Nimbus recognises."
-            + (f" Did you mean **{', '.join(hint)}**?" if hint else "")
-        )
     for ticker, reason in briefing.failed_tickers.items():
-        hint = [s for s in suggest_ticker(ticker) if s != ticker]
+        suggestion = suggest_company(ticker)
+        hint = f" Did you mean **{md_text(suggestion.name)} ({suggestion.ticker})**?" if (
+            suggestion and suggestion.ticker != ticker) else ""
         detail = "Yahoo Finance has no price data for this symbol." if "No price data" in reason else md_text(reason)
-        problems.append(f"**{ticker}**: {detail}" + (f" Did you mean **{', '.join(hint)}**?" if hint else ""))
-    for ticker in (notes.truncated if notes else []):
-        problems.append(f"**{ticker}** was left out: a briefing compares up to {MAX_TICKERS} companies.")
-
+        problems.append(f"**{ticker}**: {detail}{hint}")
     if problems:
-        label = f"⚠️ {len(problems)} {'entry was' if len(problems) == 1 else 'entries were'} not included. Details"
+        label = f"⚠️ {len(problems)} {'company was' if len(problems) == 1 else 'companies were'} not included. Details"
         with st.expander(label, expanded=False):
             st.markdown("\n".join(f"- {p}" for p in problems))
 
@@ -375,7 +458,7 @@ def sidebar() -> None:
         st.markdown("**Quick add**")
         columns = st.columns(2)
         for index, ticker in enumerate(POPULAR_TICKERS):
-            columns[index % 2].button(ticker, key=f"quick_{ticker}", on_click=add_ticker, args=(ticker,))
+            columns[index % 2].button(ticker, key=f"quick_{ticker}", on_click=quick_add, args=(ticker,))
 
         st.markdown("**Recent briefings**")
         try:
@@ -400,44 +483,96 @@ def sidebar() -> None:
         st.caption(f"Nimbus {APP_VERSION}")
 
 
+def company_picker() -> None:
+    """Search box, removable chips and a confirmation row of the chosen companies."""
+    st.text_input(
+        "Find companies",
+        key="company_query",
+        on_change=on_company_query,
+        placeholder="Type a name or ticker and press Enter, e.g. nvidia, Google, MU, or a list: AAPL, MSFT, DBS",
+        help="Company names and tickers both work. Separate several with commas. "
+             f"Up to {MAX_COMPANIES} companies per briefing.",
+    )
+
+    feedback = st.session_state.get("lookup_feedback") or {}
+    suggestions = feedback.get("suggestions") or []
+    if suggestions:
+        st.caption(f"Matches for “{md_text(feedback['query'])}”. Choose one to add:")
+        for index, match in enumerate(suggestions):
+            left, right = st.columns([6, 1], vertical_alignment="center")
+            left.markdown(f"{md_text(match.name)} &nbsp; {badge(match.ticker)}"
+                          + (f" &nbsp; · {md_text(match.exchange)}" if match.exchange else ""))
+            right.button("Add", key=f"pick_{index}_{match.ticker}", on_click=pick_suggestion,
+                         args=(match, feedback["query"], suggestions))
+    for typed, suggestion in feedback.get("not_found") or []:
+        message = f"No company found for “{md_text(typed)}”."
+        if suggestion:
+            left, right = st.columns([6, 1], vertical_alignment="center")
+            left.warning(f"{message} Did you mean {md_text(suggestion.name)} ({suggestion.ticker})?")
+            right.button(f"Add {suggestion.ticker}", key=f"didyoumean_{suggestion.ticker}",
+                         on_click=pick_suggestion, args=(suggestion, typed, []))
+        else:
+            st.warning(f"{message} Check the spelling or enter the ticker symbol.")
+    if feedback.get("over_limit"):
+        st.caption(f"A briefing compares up to {MAX_COMPANIES} companies. Remove one to add "
+                   + ", ".join(md_text(t) for t in feedback["over_limit"]) + ".")
+
+    selected = st.session_state["selected_tickers"]
+    companies: Dict[str, CompanyMatch] = st.session_state["companies"]
+    # Options are every company found this session, not just the current selection. Keeping the list
+    # stable matters: older Streamlit versions (1.50, used on EC2) reset a multiselect whose options
+    # change, which would clear all chips when one is removed. It also lets users re-add a removed one.
+    known = list(dict.fromkeys(list(companies) + list(selected)))
+    st.multiselect(
+        "Companies in this briefing",
+        options=known,
+        key="selected_tickers",
+        format_func=lambda t: f"{t} · {companies[t].name}" if t in companies and companies[t].name != t else t,
+        placeholder="No companies yet: search above or use Quick add in the sidebar",
+        help="Click × on a company to remove it.",
+    )
+
+    if selected:
+        st.caption("Check the companies before generating:")
+        for ticker in selected:
+            match = companies.get(ticker, CompanyMatch(ticker, ticker, None, "typed"))
+            typed = st.session_state["typed_as"].get(ticker)
+            alternatives = st.session_state["alternatives"].get(ticker, [])
+            c1, c2, c3, c4 = st.columns([4, 1.4, 1.6, 3], vertical_alignment="center")
+            c1.markdown(f"**{md_text(match.name)}**" + (f"  \n_typed “{md_text(typed)}”_" if typed else ""))
+            c2.markdown(badge(ticker))
+            c3.caption(match.exchange or ("Checked on generate" if match.source == "typed" else "Exchange n/a"))
+            if alternatives:
+                options = [ticker] + [m.ticker for m in alternatives]
+                labels = {ticker: f"Keep {ticker}"}
+                labels.update({m.ticker: f"Switch to {m.label}" for m in alternatives})
+                c4.selectbox("Other matches", options, key=f"switch_{ticker}", format_func=labels.get,
+                             on_change=switch_listing, args=(ticker,), label_visibility="collapsed")
+
+
 def generate_section() -> None:
     with st.container(border=True):
         st.markdown("**New briefing**")
-        left, middle, right = st.columns([5, 2, 2], vertical_alignment="bottom")
-        text = left.text_input(
-            "Companies: tickers or company names",
-            key="ticker_text",
-            placeholder="e.g. Apple, Microsoft or AAPL, MSFT",
-            help="Separate companies with commas, spaces or semicolons. Common company names are converted to "
-                 f"tickers. Up to {MAX_TICKERS} companies. Press Enter to preview.",
-        )
-        period_label = middle.selectbox("Share-price period", list(ANALYSIS_PERIODS), key="period_label")
+        company_picker()
+        left, right = st.columns([2, 5], vertical_alignment="bottom")
+        period_label = left.selectbox("Share-price period", list(ANALYSIS_PERIODS), key="period_label")
         clicked = right.button("Generate briefing", type="primary")
-
-        parsed = parse_ticker_input(text)
-        if parsed.tickers:
-            preview = " ".join(badge(t) for t in parsed.tickers)
-            preview += "".join(" " + badge(f"{t}: over limit", "gray") for t in parsed.truncated)
-            preview += "".join(" " + badge(f"{e}: not recognised", "red") for e in parsed.rejected)
-            st.markdown(f"Will compare: {preview}")
-        elif text.strip():
-            st.caption("No ticker symbols or known company names found yet.")
 
     if not clicked:
         return
-    if len(parsed.tickers) < 2:
-        st.error("Enter at least two different companies to generate a comparison briefing.")
+    tickers = list(st.session_state["selected_tickers"])
+    if len(tickers) < 2:
+        st.error("Add at least two companies to generate a comparison briefing.")
         return
-    with st.spinner(f"Retrieving {', '.join(parsed.tickers)} from Yahoo Finance…"):
+    with st.spinner(f"Retrieving {', '.join(tickers)} from Yahoo Finance…"):
         briefing = build_briefing(
-            parsed.tickers,
+            tickers,
             period_label,
             ANALYSIS_PERIODS[period_label],
             fetch_history=cached_price_history,
             fetch_company=cached_company_data,
         )
     st.session_state["briefing"] = briefing
-    st.session_state["input_notes"] = parsed
     if not briefing.companies:
         st.error("None of the companies could be retrieved. Check the symbols and try again.")
 
@@ -604,7 +739,7 @@ def render_historical(briefing_id: str) -> None:
         f"{format_timestamp(briefing.created_at)}. These figures are exactly as saved; Nimbus has not "
         "retrieved current data."
     )
-    render_notices(briefing, None)
+    render_notices(briefing)
     st.markdown("#### RM notes")
     render_note(briefing.note)
     st.markdown("#### Company comparison")
@@ -633,7 +768,7 @@ def main() -> None:
 
     briefing: Optional[Briefing] = st.session_state.get("briefing")
     if briefing is not None:
-        render_notices(briefing, st.session_state.get("input_notes"))
+        render_notices(briefing)
         if briefing.companies:
             st.caption(
                 f"Briefing for {', '.join(briefing.successful_tickers)} · generated "
