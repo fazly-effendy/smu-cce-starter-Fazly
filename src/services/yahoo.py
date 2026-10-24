@@ -14,7 +14,7 @@ from __future__ import annotations
 import html
 import math
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Dict, Iterable, List, Optional
 
 import pandas as pd
@@ -95,13 +95,18 @@ def fetch_company_data(ticker: str) -> dict:
         "cash_flow": lambda: stock.cashflow,
         "recommendations": lambda: stock.recommendations,
         "news": lambda: stock.news,
+        "calendar": lambda: stock.calendar,
+        "earnings_dates": lambda: stock.get_earnings_dates(limit=8),
     }
+    # Earnings data is often missing for non-US listings; its absence is shown as N/A, not as a warning.
+    quiet = {"calendar", "earnings_dates"}
     for key, getter in parts.items():
         try:
             raw[key] = getter()
         except Exception as exc:  # one failing endpoint must not sink the rest
             raw[key] = None
-            raw["warnings"].append(f"{key.replace('_', ' ').capitalize()} unavailable: {exc}")
+            if key not in quiet:
+                raw["warnings"].append(f"{key.replace('_', ' ').capitalize()} unavailable: {exc}")
     return raw
 
 
@@ -207,6 +212,18 @@ def _url_from(value) -> Optional[str]:
     return None
 
 
+def _thumbnail_from(content: dict, article: dict) -> Optional[str]:
+    """A small thumbnail URL if Yahoo provides one (prefers the 170x128 rendition)."""
+    thumbnail = content.get("thumbnail") or article.get("thumbnail")
+    if not isinstance(thumbnail, dict):
+        return None
+    resolutions = [r for r in thumbnail.get("resolutions") or [] if isinstance(r, dict) and _url_from(r.get("url"))]
+    preferred = next((r for r in resolutions if r.get("tag") == "170x128"), None)
+    if preferred is None and resolutions:
+        preferred = min(resolutions, key=lambda r: r.get("width") or 10_000)
+    return _url_from(preferred.get("url")) if preferred else _url_from(thumbnail.get("originalUrl"))
+
+
 def _published_from(content: dict, article: dict) -> Optional[str]:
     for key in ("pubDate", "displayTime"):
         value = content.get(key)
@@ -250,6 +267,7 @@ def parse_news(raw_news: Optional[Iterable], ticker: str, limit: int = 5) -> Lis
                 publisher=publisher if isinstance(publisher, str) and publisher else None,
                 published_at=_published_from(content, article),
                 source_url=url,
+                thumbnail_url=_thumbnail_from(content, article),
             )
         )
         if len(items) >= limit:
@@ -259,3 +277,85 @@ def parse_news(raw_news: Optional[Iterable], ticker: str, limit: int = 5) -> Lis
 
 def quote_url(ticker: str) -> str:
     return f"https://finance.yahoo.com/quote/{ticker}"
+
+
+# --------------------------------------------------------------------------
+# Analyst consensus and earnings (no network)
+# --------------------------------------------------------------------------
+
+def extract_analyst_view(info: Optional[dict], last_close: Optional[float]) -> Optional[dict]:
+    """Consensus recommendation and price targets from Yahoo's info dictionary.
+
+    Upside = mean price target / last close - 1 (both in the trading currency).
+    """
+    info = info or {}
+    target = clean_number(info.get("targetMeanPrice"))
+    analysts = clean_number(info.get("numberOfAnalystOpinions"))
+    key = info.get("recommendationKey")
+    recommendation = key.replace("_", " ") if isinstance(key, str) and key and key != "none" else None
+    view = {
+        "recommendation": recommendation,
+        "recommendation_mean": clean_number(info.get("recommendationMean")),  # 1 = strong buy ... 5 = sell
+        "analysts": int(analysts) if analysts else None,
+        "target_mean": target,
+        "target_high": clean_number(info.get("targetHighPrice")),
+        "target_low": clean_number(info.get("targetLowPrice")),
+        "upside": (target / last_close - 1.0) if target and last_close and last_close > 0 else None,
+    }
+    return view if any(value is not None for value in view.values()) else None
+
+
+def _to_date(value) -> Optional[date]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return pd.Timestamp(value).date()
+    except (ValueError, TypeError):
+        return None
+
+
+def extract_earnings(calendar, earnings_dates, today: date) -> Optional[dict]:
+    """Next earnings date and EPS estimate, and how the last reported EPS compared with its estimate.
+
+    Surprise = (reported EPS - estimate) / |estimate|, computed here rather than taken from Yahoo.
+    """
+    result: Dict[str, object] = {
+        "next_date": None, "next_eps_estimate": None, "last_date": None,
+        "last_eps_estimate": None, "last_eps_actual": None, "last_surprise": None, "last_result": None,
+    }
+    if isinstance(calendar, dict):
+        dates = calendar.get("Earnings Date") or []
+        if not isinstance(dates, (list, tuple)):
+            dates = [dates]
+        upcoming = sorted(d for d in (_to_date(x) for x in dates) if d and d >= today)
+        if upcoming:
+            result["next_date"] = upcoming[0].isoformat()
+            result["next_eps_estimate"] = clean_number(calendar.get("Earnings Average"))
+
+    if isinstance(earnings_dates, pd.DataFrame) and not earnings_dates.empty:
+        table = earnings_dates.copy()
+        table["_date"] = [_to_date(index) for index in table.index]
+        if "Reported EPS" in table.columns:
+            reported = table[table["Reported EPS"].notna()].sort_values("_date", ascending=False)
+            if not reported.empty:
+                row = reported.iloc[0]
+                actual = clean_number(row.get("Reported EPS"))
+                estimate = clean_number(row.get("EPS Estimate"))
+                result["last_date"] = row["_date"].isoformat() if row["_date"] else None
+                result["last_eps_actual"] = actual
+                result["last_eps_estimate"] = estimate
+                if actual is not None and estimate is not None:
+                    result["last_result"] = "beat" if actual > estimate else "miss" if actual < estimate else "in line"
+                    if estimate != 0:
+                        result["last_surprise"] = (actual - estimate) / abs(estimate)
+            if result["next_date"] is None:
+                future = table[table["Reported EPS"].isna() & table["_date"].map(lambda d: d is not None and d >= today)]
+                if not future.empty:
+                    row = future.sort_values("_date").iloc[0]
+                    result["next_date"] = row["_date"].isoformat()
+                    result["next_eps_estimate"] = clean_number(row.get("EPS Estimate"))
+    return result if any(value is not None for value in result.values()) else None

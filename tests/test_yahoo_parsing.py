@@ -66,3 +66,41 @@ def test_profile_and_ratings():
     ratings = yahoo.extract_latest_ratings(fake_yahoo.DATA["AAPL"]["recommendations"])
     assert ratings["period"] == "0m" and ratings["buy"] == 21
     assert yahoo.extract_latest_ratings(pd.DataFrame()) is None
+
+
+def test_news_thumbnail_prefers_small_rendition():
+    items = yahoo.parse_news(fake_yahoo.DATA["AAPL"]["news"], "AAPL")
+    assert items[0].thumbnail_url == "https://s.yimg.com/apple-170.jpg"
+    assert items[1].thumbnail_url is None
+
+
+def test_analyst_view_and_upside():
+    view = yahoo.extract_analyst_view(fake_yahoo.DATA["AAPL"]["info"], 229.0)
+    assert view["recommendation"] == "buy" and view["analysts"] == 40
+    assert view["upside"] == pytest.approx(251.9 / 229.0 - 1)
+    assert yahoo.extract_analyst_view({"recommendationKey": "none"}, 100.0) is None
+    assert yahoo.extract_analyst_view({"targetMeanPrice": 50.0}, None)["upside"] is None
+
+
+def test_earnings_next_date_and_last_result():
+    from datetime import timedelta
+    data = fake_yahoo.DATA["MSFT"]
+    today = fake_yahoo.NEXT_EARNINGS - timedelta(days=5)
+    earnings = yahoo.extract_earnings(data["calendar"], data["earnings_dates"], today)
+    assert earnings["next_date"] == fake_yahoo.NEXT_EARNINGS.isoformat()
+    assert earnings["next_eps_estimate"] == 3.62
+    assert earnings["last_date"] == fake_yahoo.LAST_EARNINGS.isoformat()
+    assert earnings["last_result"] == "beat"
+    assert earnings["last_surprise"] == pytest.approx((3.65 - 3.35) / 3.35)
+
+
+def test_earnings_after_the_scheduled_date_and_when_missing():
+    from datetime import timedelta
+    data = fake_yahoo.DATA["MSFT"]
+    later = fake_yahoo.NEXT_EARNINGS + timedelta(days=1)
+    assert yahoo.extract_earnings(data["calendar"], data["earnings_dates"], later)["next_date"] is None
+    assert yahoo.extract_earnings(None, None, later) is None
+    missed = pd.DataFrame({"EPS Estimate": [2.0], "Reported EPS": [1.5]},
+                          index=pd.DatetimeIndex(["2026-01-01"], name="Earnings Date"))
+    result = yahoo.extract_earnings({}, missed, later)
+    assert result["last_result"] == "miss" and result["last_surprise"] == pytest.approx(-0.25)

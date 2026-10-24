@@ -95,7 +95,7 @@ def test_acceptance_workflow(isolated_environment):
     # Step 8: sourced news with clickable links, publisher and date
     news_markdown = " ".join(m.value for m in app.markdown)
     assert "(https://finance.yahoo.com/news/apple-1.html)" in news_markdown
-    assert "Reuters · 20 Oct 2026" in news_markdown
+    assert ":blue-badge[AAPL] · Reuters · " in news_markdown and " ago" in news_markdown
     assert "\\$AAPL" in news_markdown  # dollar sign escaped, not rendered as maths
 
     # Step 9: RM note
@@ -127,8 +127,8 @@ def test_acceptance_workflow(isolated_environment):
     page_text = " ".join(m.value for m in app.markdown)
     assert "Discussed FY results and capex plans" in page_text
     assert "Send comparison deck by Friday" in page_text
-    historical_table = app.table[-4].value  # comparison table inside the reopened briefing
-    assert historical_table.equals(table)
+    historical_table = [t.value for t in app.table if "Revenue growth (YoY)" in t.value.index][-1]
+    assert historical_table.equals(table)  # comparison table inside the reopened briefing
 
     # Steps 15-16: restart (new session, same database and files), search and reopen again
     restarted = start_app()
@@ -270,3 +270,57 @@ def test_recent_briefings_in_sidebar_open_the_saved_briefing():
     recent[0].click().run()
     assert app.session_state["open_briefing_id"] == key
     assert any("Historical snapshot" in i.value for i in app.info)
+
+
+def markdown_containing(app: AppTest, text: str) -> str:
+    return next(m.value for m in app.markdown if text in m.value)
+
+
+def test_analyst_view_shows_consensus_target_and_upside():
+    app = generate(start_app(), "AAPL, MSFT")
+    table = markdown_containing(app, "| Company | Consensus |")
+    assert "| AAPL | :green-badge[Buy] | 40 | $251.90 | 10.0% | $180.00 – $300.00 |" in table
+    assert "| MSFT | N/A | N/A | N/A | N/A | N/A |" in table  # missing data is N/A, never zero
+    charts = app.get("vega_lite_chart") + app.get("arrow_vega_lite_chart")  # element name differs by version
+    assert len(charts) == 2  # price chart + ratings bar
+
+
+def test_earnings_table_shows_next_date_and_beat_or_miss():
+    app = generate(start_app(), "AAPL, MSFT")
+    table = markdown_containing(app, "| Company | Next earnings |")
+    assert f"| MSFT | {fake_yahoo.NEXT_EARNINGS.strftime('%d %b %Y')} | 3.62 |" in table
+    assert "3.65 vs 3.35 | :green-badge[Beat] 9.0% |" in table
+
+
+def test_news_feed_is_newest_first_filterable_and_shows_thumbnails():
+    app = generate(start_app(), "AAPL, MSFT")
+    headlines = [m.value for m in app.markdown if m.value.startswith("**[")]
+    assert [h.split("](")[0] for h in headlines] == [
+        "**[Microsoft cloud revenue rises", "**[Apple & partners expand \\$AAPL services",
+        "**[Analysts review iPhone demand"]
+    images = app.get("image") + app.get("imgs")  # element name differs between Streamlit versions
+    assert len(images) == 1 and "https://s.yimg.com/apple-170.jpg" in str(images[0].proto)
+    app.get("button_group")[0].set_value(["MSFT"]).run()  # company filter
+    headlines = [m.value for m in app.markdown if m.value.startswith("**[")]
+    assert len(headlines) == 1 and "Microsoft" in headlines[0]
+
+
+def test_saved_articles_are_stored_with_the_note_and_reopened(isolated_environment):
+    app = generate(start_app(), "AAPL, MSFT")
+    pin = next(b for b in app.button if b.label == "☆ Save to note")
+    pin.click().run()
+    assert any(b.label == "★ Saved to note" for b in app.button)
+    assert "Microsoft cloud revenue rises" in markdown_containing(app, "Microsoft cloud revenue rises")
+
+    key = app.session_state["briefing"].briefing_id
+    app.text_input(key=f"ref_{key}").set_value("Article check")
+    app.text_area(key=f"summary_{key}").set_value("Summary")
+    button(app, "Save briefing and RM notes").click().run()
+    assert not any("Save to note" in b.label for b in app.button)  # read-only once saved
+
+    row = database.search_briefings()[0]
+    text = (isolated_environment / row["filename"]).read_text()
+    assert "**Saved articles**" in text and "[Microsoft cloud revenue rises](https://example.com/msft-cloud)" in text
+
+    restarted = search_and_open(start_app(), "MSFT")
+    assert "Saved articles" in " ".join(m.value for m in restarted.markdown)

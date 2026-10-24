@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
 
-SCHEMA_VERSION = 2  # 2: adds price_history (actual prices for chart tooltips)
+SCHEMA_VERSION = 3  # 2: price_history; 3: news thumbnails, analyst view, earnings, saved articles
 ANALYSIS_TYPE = "company_briefing"
 
 
@@ -22,6 +22,7 @@ class NewsItem:
     publisher: Optional[str]
     published_at: Optional[str]  # ISO 8601 date-time from the source, or None
     source_url: Optional[str]
+    thumbnail_url: Optional[str] = None
 
 
 @dataclass
@@ -48,6 +49,11 @@ class CompanySnapshot:
     # Latest analyst recommendation counts, e.g. {"period": "0m", "strongBuy": 9, ...}
     ratings: Optional[Dict[str, object]] = None
     news: List[NewsItem] = field(default_factory=list)
+    # Analyst consensus: recommendation, analysts, target_mean/high/low, upside (fraction)
+    analyst: Optional[Dict[str, object]] = None
+    # Earnings: next_date, next_eps_estimate, last_date, last_eps_estimate, last_eps_actual,
+    # last_surprise (fraction), last_result ("beat" / "miss" / "in line")
+    earnings: Optional[Dict[str, object]] = None
     warnings: List[str] = field(default_factory=list)
 
     @classmethod
@@ -67,6 +73,8 @@ class RmNote:
     next_review_date: Optional[str]  # YYYY-MM-DD
     free_text: str
     created_at: str  # ISO 8601 UTC
+    # News articles the RM chose to keep with this note (ticker, headline, publisher, published_at, source_url)
+    saved_articles: List[Dict[str, Optional[str]]] = field(default_factory=list)
 
 
 @dataclass

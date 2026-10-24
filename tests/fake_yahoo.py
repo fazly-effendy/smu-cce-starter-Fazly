@@ -10,10 +10,14 @@ briefing makes no Yahoo calls.
 from __future__ import annotations
 
 from collections import Counter
+from datetime import date, timedelta
 
 import pandas as pd
 
 CALLS: Counter = Counter()
+
+NEXT_EARNINGS = date.today() + timedelta(days=5)
+LAST_EARNINGS = date.today() - timedelta(days=86)
 
 FY = [pd.Timestamp("2025-09-30"), pd.Timestamp("2024-09-30"), pd.Timestamp("2023-09-30")]
 
@@ -34,7 +38,9 @@ DATA = {
     "AAPL": {
         "history": _history(200.0, 1.0),
         "info": {"longName": "Apple Inc.", "currency": "USD", "financialCurrency": "USD",
-                 "marketCap": 3.5e12, "trailingPE": 33.456},
+                 "marketCap": 3.5e12, "trailingPE": 33.456, "recommendationKey": "buy",
+                 "recommendationMean": 1.9, "numberOfAnalystOpinions": 40, "targetMeanPrice": 251.9,
+                 "targetHighPrice": 300.0, "targetLowPrice": 180.0},
         "income_stmt": _statement({
             "Tax Effect Of Unusual Items": [1.0, 2.0, 3.0],
             "Total Revenue": [416e9, 391e9, 383e9],
@@ -58,6 +64,10 @@ DATA = {
                 "pubDate": "2026-10-20T12:00:00Z",
                 "provider": {"displayName": "Reuters", "url": "https://www.reuters.com"},
                 "canonicalUrl": {"url": "https://finance.yahoo.com/news/apple-1.html", "site": "finance"},
+                "thumbnail": {"originalUrl": "https://s.yimg.com/apple-original.jpg", "resolutions": [
+                    {"url": "https://s.yimg.com/apple-original.jpg", "width": 1200, "height": 800, "tag": "original"},
+                    {"url": "https://s.yimg.com/apple-170.jpg", "width": 170, "height": 128, "tag": "170x128"},
+                ]},
             }},
             {"id": "a2", "content": {
                 "title": "Analysts review iPhone demand",
@@ -84,6 +94,15 @@ DATA = {
         }, dates=[pd.Timestamp("2025-06-30"), pd.Timestamp("2024-06-30"), pd.Timestamp("2023-06-30")]),
         "cashflow": pd.DataFrame(),
         "recommendations": pd.DataFrame(),
+        # Dates relative to today so the "next earnings" stays in the future whenever tests run.
+        "calendar": {"Earnings Date": [NEXT_EARNINGS], "Earnings Average": 3.62, "Earnings Low": 3.4,
+                     "Earnings High": 3.8, "Revenue Average": 7.5e10},
+        "earnings_dates": pd.DataFrame(
+            {"EPS Estimate": [3.62, 3.35, 3.22], "Reported EPS": [float("nan"), 3.65, 3.10],
+             "Surprise(%)": [float("nan"), 8.96, -3.73]},
+            index=pd.DatetimeIndex([pd.Timestamp(NEXT_EARNINGS), pd.Timestamp(LAST_EARNINGS),
+                                    pd.Timestamp(LAST_EARNINGS - timedelta(days=91))],
+                                   name="Earnings Date").tz_localize("America/New_York")),
         "news": [
             {"title": "Microsoft cloud revenue rises", "publisher": "Bloomberg",
              "link": "https://example.com/msft-cloud", "providerPublishTime": 1792500000},
@@ -127,6 +146,13 @@ class FakeTicker:
     @property
     def news(self):
         return self._get("news", [])
+
+    @property
+    def calendar(self):
+        return self._get("calendar", {}) if self._data and "calendar" in self._data else {}
+
+    def get_earnings_dates(self, limit=12):
+        return self._get("earnings_dates", None) if self._data and "earnings_dates" in self._data else None
 
 
 # Search results shaped like yfinance Search(...).quotes. Keys are lower-case queries.

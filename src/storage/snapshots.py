@@ -20,6 +20,7 @@ from typing import Tuple
 from analytics.formatting import (
     NOT_AVAILABLE,
     format_date,
+    format_eps,
     format_money,
     format_multiple,
     format_percent,
@@ -166,6 +167,28 @@ def briefing_markdown(briefing: Briefing) -> str:
             ))
         else:
             out.append("No analyst ratings available.")
+        view = company.analyst or {}
+        if view:
+            out.append("")
+            out.append(
+                f"Consensus: {(view.get('recommendation') or NOT_AVAILABLE).title()} "
+                f"({view.get('analysts') or NOT_AVAILABLE} analysts); mean price target "
+                f"{format_price(view.get('target_mean'), company.currency)}, upside {format_percent(view.get('upside'))} "
+                f"(range {format_price(view.get('target_low'), company.currency)} to "
+                f"{format_price(view.get('target_high'), company.currency)})."
+            )
+        earnings = company.earnings or {}
+        out += ["", "### Earnings", ""]
+        if earnings:
+            out.append(f"- Next earnings: {format_date(earnings.get('next_date'))}, EPS estimate "
+                       f"{format_eps(earnings.get('next_eps_estimate'))}")
+            out.append(f"- Last reported: {format_date(earnings.get('last_date'))}, EPS "
+                       f"{format_eps(earnings.get('last_eps_actual'))} vs estimate "
+                       f"{format_eps(earnings.get('last_eps_estimate'))}"
+                       + (f" ({earnings['last_result']}, surprise {format_percent(earnings.get('last_surprise'))})"
+                          if earnings.get("last_result") else ""))
+        else:
+            out.append("No earnings data available.")
         out += ["", "### News", ""]
         if company.news:
             for item in company.news:
@@ -192,6 +215,14 @@ def briefing_markdown(briefing: Briefing) -> str:
             "**Follow-up actions**", "", note.follow_up_actions or NOT_AVAILABLE, "",
             "**Other notes**", "", note.free_text or NOT_AVAILABLE,
         ]
+        if note.saved_articles:
+            out += ["", "**Saved articles**", ""]
+            for article in note.saved_articles:
+                headline = article.get("headline") or "Untitled"
+                title = f"[{headline}]({article['source_url']})" if article.get("source_url") else headline
+                meta = " · ".join(x for x in [article.get("ticker"), article.get("publisher"),
+                                               format_date(article.get("published_at")) if article.get("published_at") else None] if x)
+                out.append(f"- {title}" + (f" ({meta})" if meta else ""))
     else:
         out.append("No RM note recorded.")
     return "\n".join(out).rstrip() + "\n"

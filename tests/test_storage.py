@@ -100,3 +100,27 @@ def test_snapshot_reader_refuses_paths_outside_the_data_folder():
         snapshots.read_snapshot("../secrets.json")
     with pytest.raises(ValueError):
         snapshots.read_snapshot("notes.txt")
+
+
+def test_snapshots_saved_by_older_versions_still_open(isolated_environment):
+    """Version 0.2 snapshots have none of the fields added later (schema 1)."""
+    import json
+
+    briefing = make_briefing()
+    result = briefing_store.save_briefing(briefing, make_note())
+    path = isolated_environment / result.filename.replace(".md", ".json")
+    data = json.loads(path.read_text())
+    data["schema_version"] = 1
+    data.pop("price_history")
+    data["note"].pop("saved_articles")
+    for company in data["companies"]:
+        company.pop("analyst")
+        company.pop("earnings")
+        for item in company["news"]:
+            item.pop("thumbnail_url")
+    path.write_text(json.dumps(data))
+
+    reopened, _ = briefing_store.open_briefing(briefing.briefing_id)
+    assert reopened.schema_version == 1
+    assert reopened.price_history == {} and reopened.note.saved_articles == []
+    assert reopened.companies[0].analyst is None and reopened.companies[0].news[0].thumbnail_url is None

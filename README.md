@@ -8,7 +8,7 @@ search for it and reopen it exactly as it was.
 
 Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 
-> **Status (prototype v0.4.0, local).** Features 1–5 work end to end in
+> **Status (prototype v0.5.0, local).** Features 1–5 work end to end in
 > GitHub Codespaces using SQLite and local files. Moving the database to
 > Amazon RDS and adding auto scaling (Feature 6) are the next stages; see
 > [Project status](#project-status) and [Known limitations](#known-limitations).
@@ -71,14 +71,19 @@ install Jupyter support: `pip install jupyter ipykernel`.
    Then choose a share-price period and select **Generate briefing**. Any
    company Yahoo cannot supply is listed in one collapsible notice.
 2. **📊 Compare:** a card per company (last close with period return, market
-   cap, P/E), the financial comparison table, and an interactive share-price
-   chart rebased to 100 (hover for date and actual price).
+   cap, P/E), the financial comparison table, an interactive share-price chart
+   rebased to 100 (hover for date and actual price), the **analyst view**
+   (share of buy/hold/sell ratings, consensus, mean price target and upside)
+   and **earnings** (next date and EPS estimate; last result as beat or miss).
 3. **📑 Financials:** annual statement line items, formatted in millions,
    billions or trillions.
-4. **📰 News & ratings:** analyst recommendation counts and recent news, each
-   with publisher, date, summary and a link to the source.
-5. **📝 Notes & save:** fill in the meeting note, then select **Save
-   briefing and RM notes**. Each briefing can be saved once.
+4. **📰 News:** one feed for all companies, newest first, filterable by
+   company. Each card shows the linked headline, company, publisher, how long
+   ago it was published, the summary and a thumbnail where Yahoo provides one.
+   **Save to note** keeps an article with the RM note.
+5. **📝 Notes & save:** fill in the meeting note (any articles you saved are
+   listed), then select **Save briefing and RM notes**. Each briefing can be
+   saved once.
 6. **🗂️ History:** filter by ticker, date range, client reference or analysis
    type; choose a result and select **Open briefing**. The five most recent
    briefings are also one click away in the sidebar. A reopened briefing is
@@ -199,6 +204,8 @@ gives none, the app says so.
 | P/E (trailing), market cap | As reported by Yahoo at retrieval time; a negative P/E shows N/A |
 | Rebased share price | Adjusted close ÷ adjusted close on the first common date × 100 |
 | Holding-period return | Last ÷ first adjusted close − 1, over dates every company traded |
+| Upside to target | Analysts' mean price target ÷ last close − 1 |
+| Earnings surprise | (Reported EPS − estimate) ÷ \|estimate\|; beat if reported > estimate |
 
 **Rules.**
 - A measure is N/A when an input is missing or a denominator is zero or negative.
@@ -333,6 +340,12 @@ briefing files and SQLite on the instance's EBS root volume. This meets the
   historical news searches.
 - **Ratios** use annual statements only (no quarterly or trailing-twelve-month
   figures).
+- **Analyst targets and earnings dates** are third-party figures from Yahoo at
+  the time of retrieval; earnings dates can move, and coverage is thinner for
+  non-US listings (shown as N/A). Nimbus shows them for context and makes no
+  recommendation of its own.
+- **Saved articles** are stored in the briefing's snapshot files (Markdown and
+  JSON), not as separate database rows.
 - **Files are local to one machine.** Briefings saved in Codespaces and on EC2
   are separate. With auto scaling (several EC2 instances), a briefing saved on
   one instance's disk would not be readable from another. The storage design

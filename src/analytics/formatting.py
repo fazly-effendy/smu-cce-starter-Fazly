@@ -70,3 +70,31 @@ def format_timestamp(value: Optional[str]) -> str:
     if parsed.tzinfo is not None:
         parsed = parsed.astimezone(timezone.utc)
     return parsed.strftime("%d %b %Y, %H:%M UTC")
+
+
+def format_time_ago(value: Optional[str], now: Optional[datetime] = None) -> str:
+    """ISO date-time -> "3h ago", "2d ago"; older than 30 days -> the date. None -> "N/A"."""
+    if not value:
+        return NOT_AVAILABLE
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    seconds = (now - parsed).total_seconds()
+    if seconds < 0:
+        return format_date(value)
+    if seconds < 3600:
+        return f"{max(int(seconds // 60), 1)}m ago"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h ago"
+    if seconds < 30 * 86400:
+        return f"{int(seconds // 86400)}d ago"
+    return format_date(value)
+
+
+def format_eps(value: Optional[float]) -> str:
+    """Earnings per share: 1.6 -> "1.60"; None -> "N/A"."""
+    return NOT_AVAILABLE if value is None else f"{value:,.2f}"

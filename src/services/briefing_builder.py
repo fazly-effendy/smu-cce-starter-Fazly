@@ -57,6 +57,9 @@ def build_company_snapshot(ticker: str, closes: pd.Series, raw: dict, retrieved_
         ratios=ratios,
         ratings=yahoo.extract_latest_ratings(raw.get("recommendations")),
         news=news,
+        analyst=yahoo.extract_analyst_view(raw.get("info"), float(closes.iloc[-1])),
+        earnings=yahoo.extract_earnings(raw.get("calendar"), raw.get("earnings_dates"),
+                                        datetime.now(timezone.utc).date()),
         warnings=warnings,
     )
 

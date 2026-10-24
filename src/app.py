@@ -12,6 +12,7 @@ calculations in analytics/, and saving/searching in storage/.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import date
 from typing import Dict, List, Optional
 
@@ -22,10 +23,12 @@ import streamlit as st
 from analytics.formatting import (
     NOT_AVAILABLE,
     format_date,
+    format_eps,
     format_money,
     format_multiple,
     format_percent,
     format_price,
+    format_time_ago,
     format_timestamp,
 )
 from analytics.ratios import RATIO_LABELS
@@ -55,6 +58,12 @@ st.set_page_config(page_title="Nimbus · Company briefings", page_icon="☁️",
 # Accent colour (same as primaryColor in .streamlit/config.toml) followed by
 # distinct, colour-blind-friendly colours for further companies.
 CHART_COLOURS = ["#2563EB", "#F59E0B", "#10B981", "#DB2777", "#7C3AED", "#0891B2"]
+# Analyst rating buckets: green for buy, grey for hold, red for sell.
+RATING_BUCKETS = [("strongBuy", "Strong buy", "#15803D"), ("buy", "Buy", "#4ADE80"), ("hold", "Hold", "#94A3B8"),
+                  ("sell", "Sell", "#F87171"), ("strongSell", "Strong sell", "#B91C1C")]
+CONSENSUS_BADGE = {"strong buy": "green", "buy": "green", "outperform": "green", "hold": "gray",
+                   "underperform": "red", "sell": "red", "strong sell": "red"}
+RESULT_BADGE = {"beat": "green", "miss": "red", "in line": "gray"}
 POPULAR_TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "MU", "JPM", "D05.SI", "O39.SI"]
 
 _PAGE_CSS = """
@@ -118,6 +127,7 @@ def init_state() -> None:
     st.session_state.setdefault("alternatives", {})  # ticker -> other matches the user can switch to
     st.session_state.setdefault("typed_as", {})  # ticker -> what the user typed, e.g. "Google"
     st.session_state.setdefault("lookup_feedback", {})  # suggestions / not found, for the last search
+    st.session_state.setdefault("pinned_articles", {})  # briefing_id -> article keys to keep with the note
 
 
 # --------------------------------------------------------------------------
@@ -350,14 +360,89 @@ def render_comparison(briefing: Briefing) -> None:
     chart = price_chart(briefing)
     if chart is None:
         st.info("Not enough common trading days to draw a comparison chart.")
-        return
-    st.altair_chart(chart)
-    if briefing.price_window:
-        st.caption(
-            f"Adjusted closing prices from {format_date(briefing.price_window[0])} to "
-            f"{format_date(briefing.price_window[1])}, on dates when every company traded. Each line starts at 100 "
-            "(dashed line); hover for the date and actual price."
+    else:
+        st.altair_chart(chart)
+        if briefing.price_window:
+            st.caption(
+                f"Adjusted closing prices from {format_date(briefing.price_window[0])} to "
+                f"{format_date(briefing.price_window[1])}, on dates when every company traded. Each line starts "
+                "at 100 (dashed line); hover for the date and actual price."
+            )
+
+    render_analyst_view(briefing)
+    render_earnings(briefing)
+
+
+def ratings_chart(briefing: Briefing) -> Optional[alt.Chart]:
+    """Share of analysts per recommendation, one bar per company."""
+    rows = []
+    for company in briefing.companies:
+        for order, (key, label, _) in enumerate(RATING_BUCKETS):
+            count = (company.ratings or {}).get(key)
+            if count:
+                rows.append({"Company": company.ticker, "Rating": label, "Analysts": count, "Order": order})
+    if not rows:
+        return None
+    tickers = [c.ticker for c in briefing.companies if c.ratings]
+    return alt.Chart(pd.DataFrame(rows)).mark_bar().encode(
+        y=alt.Y("Company:N", title=None, sort=tickers),
+        x=alt.X("Analysts:Q", stack="normalize", title="Share of analysts (current month)",
+                axis=alt.Axis(format="%")),
+        color=alt.Color("Rating:N", legend=alt.Legend(orient="top", title=None),
+                        scale=alt.Scale(domain=[b[1] for b in RATING_BUCKETS], range=[b[2] for b in RATING_BUCKETS])),
+        order=alt.Order("Order:Q"),
+        tooltip=["Company:N", "Rating:N", "Analysts:Q"],
+    ).properties(height=36 * len(tickers) + 50, width="container")
+
+
+def render_analyst_view(briefing: Briefing) -> None:
+    st.markdown("#### Analyst view")
+    chart = ratings_chart(briefing)
+    if chart is not None:
+        st.altair_chart(chart)
+    rows = []
+    for company in briefing.companies:
+        view = company.analyst or {}
+        consensus = view.get("recommendation")
+        target_range = (f"{format_price(view.get('target_low'), company.currency)} – "
+                        f"{format_price(view.get('target_high'), company.currency)}"
+                        if view.get("target_low") is not None and view.get("target_high") is not None else NOT_AVAILABLE)
+        rows.append(
+            f"| {company.ticker} | "
+            + (badge(consensus.title(), CONSENSUS_BADGE.get(consensus, "gray")) if consensus else NOT_AVAILABLE)
+            + f" | {view.get('analysts') or NOT_AVAILABLE} | {format_price(view.get('target_mean'), company.currency)}"
+            f" | {format_percent(view.get('upside'))} | {target_range} |"
         )
+    st.markdown(
+        "| Company | Consensus | Analysts | Mean price target | Upside to target | Target range |\n"
+        "|---|---|---|---|---|---|\n" + "\n".join(rows)
+    )
+    st.caption("Analyst consensus and price targets from Yahoo Finance at retrieval time. Upside = mean target ÷ "
+               "last close − 1. These are third-party analyst views, not Nimbus recommendations.")
+
+
+def render_earnings(briefing: Briefing) -> None:
+    st.markdown("#### Earnings")
+    rows = []
+    for company in briefing.companies:
+        e = company.earnings or {}
+        result = e.get("last_result")
+        outcome = NOT_AVAILABLE
+        if result:
+            surprise = e.get("last_surprise")
+            outcome = badge(result.title(), RESULT_BADGE.get(result, "gray")) + (
+                f" {format_percent(surprise)}" if surprise is not None else "")
+        rows.append(
+            f"| {company.ticker} | {format_date(e.get('next_date'))} | {format_eps(e.get('next_eps_estimate'))} | "
+            f"{format_date(e.get('last_date'))} | {format_eps(e.get('last_eps_actual'))} vs "
+            f"{format_eps(e.get('last_eps_estimate'))} | {outcome} |"
+        )
+    st.markdown(
+        "| Company | Next earnings | EPS estimate (next) | Last reported | EPS actual vs estimate | Result |\n"
+        "|---|---|---|---|---|---|\n" + "\n".join(rows)
+    )
+    st.caption("From Yahoo Finance at retrieval time; scheduled dates can change. Result compares reported EPS with "
+               "the analyst estimate: surprise = (actual − estimate) ÷ |estimate|.")
 
 
 def render_financials(briefing: Briefing) -> None:
@@ -389,41 +474,70 @@ def render_financials(briefing: Briefing) -> None:
             )
 
 
-def render_news_and_ratings(briefing: Briefing) -> None:
+def article_key(item) -> str:
+    return hashlib.md5(f"{item.ticker}|{item.source_url or item.headline}".encode("utf-8")).hexdigest()[:12]
+
+
+def toggle_saved_article(briefing_id: str, key: str) -> None:
+    pinned = list(st.session_state["pinned_articles"].get(briefing_id, []))
+    if key in pinned:
+        pinned.remove(key)
+    else:
+        pinned.append(key)
+    st.session_state["pinned_articles"][briefing_id] = pinned
+
+
+def render_news_feed(briefing: Briefing, live: bool) -> None:
+    """All companies' news as one feed of cards, newest first, with a company filter.
+
+    live=True for the briefing being prepared (relative times, Save to note);
+    live=False for a reopened snapshot (fixed dates, read-only).
+    """
     if not briefing.companies:
         st.info("No company data to show.")
         return
-    for company in briefing.companies:
-        with st.container(border=True):
-            st.markdown(f"**{md_text(company.name)}** &nbsp; {badge(company.ticker)}")
-            ratings = company.ratings
-            if ratings:
-                labels = [("strongBuy", "Strong buy"), ("buy", "Buy"), ("hold", "Hold"), ("sell", "Sell"),
-                          ("strongSell", "Strong sell")]
-                counts = [ratings.get(key) for key, _ in labels]
-                st.caption("Analyst recommendations (number of analysts, current month)")
-                st.table(pd.DataFrame([[c if c is not None else NOT_AVAILABLE for c in counts]],
-                                      columns=[label for _, label in labels], index=["Analysts"]))
-            else:
-                st.caption("No analyst ratings available from Yahoo Finance.")
+    prefix = "live" if live else f"hist_{briefing.briefing_id[:8]}"
+    chosen = st.segmented_control(
+        "Show news for", briefing.successful_tickers, selection_mode="multi",
+        default=briefing.successful_tickers, key=f"{prefix}_news_filter",
+        help="Click a company to hide or show its news. With none selected, all news is shown.",
+    )
+    items = [item for company in briefing.companies for item in company.news]
+    if chosen:
+        items = [item for item in items if item.ticker in chosen]
+    items.sort(key=lambda item: item.published_at or "", reverse=True)
 
-            st.markdown("**Recent news**")
-            if not company.news:
-                st.caption("No recent news available from Yahoo Finance.")
-            for item in company.news:
-                headline = md_text(item.headline)
-                title = f"[{headline}]({item.source_url})" if item.source_url else headline
-                meta = " · ".join(
-                    part for part in [md_text(item.publisher),
-                                      format_date(item.published_at) if item.published_at else ""]
-                    if part
-                )
-                st.markdown(f"**{title}**  \n{meta or 'Publisher and date not provided'}")
-                st.markdown(md_text(item.summary) if item.summary else "_No summary provided by the source._")
-                if not item.source_url:
-                    st.caption("Source link not provided by Yahoo.")
-            for warning in company.warnings:
-                st.caption(f"Note: {md_text(warning)}")
+    saved = briefing.briefing_id in st.session_state["saved"]
+    pinned = st.session_state["pinned_articles"].get(briefing.briefing_id, [])
+    can_pin = live and not saved
+    st.caption(
+        f"{len(items)} {'article' if len(items) == 1 else 'articles'}, newest first."
+        + (" Use **Save to note** to keep an article with your RM note." if can_pin else "")
+    )
+    if not items:
+        st.info("No recent news available from Yahoo Finance.")
+
+    for item in items:
+        with st.container(border=True):
+            if item.thumbnail_url:
+                picture, text = st.columns([1, 7])
+                picture.image(item.thumbnail_url, width=110)
+            else:
+                text = st.container()
+            headline = md_text(item.headline)
+            text.markdown(f"**[{headline}]({item.source_url})**" if item.source_url else f"**{headline}**")
+            when = (format_time_ago(item.published_at) if live else format_date(item.published_at)) \
+                if item.published_at else "date not provided"
+            text.markdown(" · ".join([badge(item.ticker), md_text(item.publisher) or "Publisher not provided", when]))
+            text.markdown(md_text(item.summary) if item.summary else "_No summary provided by the source._")
+            if can_pin:
+                key = article_key(item)
+                text.button("★ Saved to note" if key in pinned else "☆ Save to note", key=f"pin_{key}",
+                            on_click=toggle_saved_article, args=(briefing.briefing_id, key))
+
+    notes = [f"{company.ticker}: {md_text(w)}" for company in briefing.companies for w in company.warnings]
+    if notes:
+        st.caption("Notes: " + " · ".join(notes))
 
 
 def render_note(note: Optional[RmNote]) -> None:
@@ -444,6 +558,20 @@ def render_note(note: Optional[RmNote]) -> None:
         ):
             st.markdown(f"**{label}**")
             st.markdown(md_text(text) if text else NOT_AVAILABLE)
+        if note.saved_articles:
+            st.markdown("**Saved articles**")
+            st.markdown(render_article_list(note.saved_articles))
+
+
+def render_article_list(articles) -> str:
+    lines = []
+    for article in articles:
+        headline = md_text(article.get("headline"))
+        title = f"[{headline}]({article['source_url']})" if article.get("source_url") else headline
+        meta = " · ".join(x for x in [article.get("ticker"), md_text(article.get("publisher")),
+                                       format_date(article.get("published_at")) if article.get("published_at") else ""] if x)
+        lines.append(f"- {title} ({meta})")
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------
@@ -577,6 +705,54 @@ def generate_section() -> None:
         st.error("None of the companies could be retrieved. Check the symbols and try again.")
 
 
+def pinned_articles(briefing: Briefing) -> List[Dict[str, Optional[str]]]:
+    """The articles the RM marked with Save to note, in the order they were saved."""
+    by_key = {article_key(item): item for company in briefing.companies for item in company.news}
+    return [
+        {"ticker": item.ticker, "headline": item.headline, "publisher": item.publisher,
+         "published_at": item.published_at, "source_url": item.source_url}
+        for item in (by_key.get(key) for key in st.session_state["pinned_articles"].get(briefing.briefing_id, []))
+        if item is not None
+    ]
+
+
+def save_from_form(briefing: Briefing) -> None:
+    """'Save briefing and RM notes' click handler.
+
+    Runs before the page is redrawn, so the whole page (including the News tab's
+    Save to note buttons) is drawn once, already in its saved state. This avoids
+    relying on st.rerun(), which older Streamlit versions do not always honour.
+    """
+    key = briefing.briefing_id
+    state = st.session_state
+    client_reference = (state.get(f"ref_{key}") or "").strip()
+    discussion_summary = (state.get(f"summary_{key}") or "").strip()
+    if not client_reference or not discussion_summary:
+        state["save_error"] = "Please enter a client or briefing reference and a discussion summary before saving."
+        return
+    meeting_date = state.get(f"meeting_{key}")
+    next_review_date = state.get(f"review_{key}")
+    note = RmNote(
+        client_reference=client_reference,
+        meeting_date=meeting_date.isoformat() if meeting_date else None,
+        discussion_summary=discussion_summary,
+        client_priorities=(state.get(f"priorities_{key}") or "").strip(),
+        follow_up_actions=(state.get(f"actions_{key}") or "").strip(),
+        next_review_date=next_review_date.isoformat() if next_review_date else None,
+        free_text=(state.get(f"other_{key}") or "").strip(),
+        created_at=utc_now_iso(),
+        saved_articles=pinned_articles(briefing),
+    )
+    try:
+        result = briefing_store.save_briefing(briefing, note)
+    except Exception as exc:
+        state["save_error"] = f"The briefing could not be saved: {exc}"
+        return
+    state["saved"][key] = result.filename
+    state["saved_note"] = result.briefing.note or note
+    state.pop("save_error", None)
+
+
 def notes_and_save_section(briefing: Optional[Briefing]) -> None:
     if briefing is None:
         st.info("Generate a briefing first, then record your meeting notes here.")
@@ -595,48 +771,32 @@ def notes_and_save_section(briefing: Optional[Briefing]) -> None:
         f"Notes will be saved together with the briefing for {', '.join(briefing.successful_tickers)} "
         f"generated {format_timestamp(briefing.created_at)}. Fields marked * are required."
     )
+    articles = pinned_articles(briefing)
+    if articles:
+        st.markdown(f"**Articles to keep with this note ({len(articles)})**")
+        st.markdown(render_article_list(articles))
+    else:
+        st.caption("Tip: use **Save to note** in the News tab to keep relevant articles with this note.")
+
     key = briefing.briefing_id  # fresh, empty note fields for every new briefing
     with st.form(f"rm_note_form_{key}"):
         left, right = st.columns(2)
-        client_reference = left.text_input(
-            "Client or briefing reference *", placeholder="e.g. Acme Holdings – Q4 review", key=f"ref_{key}"
-        )
-        meeting_date = right.date_input("Meeting date", value=date.today(), key=f"meeting_{key}")
-        discussion_summary = st.text_area(
-            "Discussion summary *", placeholder="What was discussed with the client?", key=f"summary_{key}"
-        )
+        left.text_input("Client or briefing reference *", placeholder="e.g. Acme Holdings – Q4 review",
+                        key=f"ref_{key}")
+        right.date_input("Meeting date", value=date.today(), key=f"meeting_{key}")
+        st.text_area("Discussion summary *", placeholder="What was discussed with the client?", key=f"summary_{key}")
         left, right = st.columns(2)
-        client_priorities = left.text_area("Client priorities or concerns", key=f"priorities_{key}")
-        follow_up_actions = right.text_area("Follow-up actions", key=f"actions_{key}")
+        left.text_area("Client priorities or concerns", key=f"priorities_{key}")
+        right.text_area("Follow-up actions", key=f"actions_{key}")
         left, right = st.columns([1, 3])
-        next_review_date = left.date_input("Next review date (optional)", value=None, key=f"review_{key}")
-        free_text = right.text_area("Other notes (optional)", key=f"other_{key}", height=68)
-        submitted = st.form_submit_button("Save briefing and RM notes", type="primary")
+        left.date_input("Next review date (optional)", value=None, key=f"review_{key}")
+        right.text_area("Other notes (optional)", key=f"other_{key}", height=68)
+        st.form_submit_button("Save briefing and RM notes", type="primary", on_click=save_from_form,
+                              args=(briefing,))
 
-    if not submitted:
-        return
-    if not client_reference.strip() or not discussion_summary.strip():
-        st.error("Please enter a client or briefing reference and a discussion summary before saving.")
-        return
-
-    note = RmNote(
-        client_reference=client_reference.strip(),
-        meeting_date=meeting_date.isoformat() if meeting_date else None,
-        discussion_summary=discussion_summary.strip(),
-        client_priorities=client_priorities.strip(),
-        follow_up_actions=follow_up_actions.strip(),
-        next_review_date=next_review_date.isoformat() if next_review_date else None,
-        free_text=free_text.strip(),
-        created_at=utc_now_iso(),
-    )
-    try:
-        result = briefing_store.save_briefing(briefing, note)
-    except Exception as exc:
-        st.error(f"The briefing could not be saved: {exc}")
-        return
-    st.session_state["saved"][briefing.briefing_id] = result.filename
-    st.session_state["saved_note"] = result.briefing.note or note
-    st.rerun()
+    error = st.session_state.pop("save_error", None)
+    if error:
+        st.error(error)
 
 
 def history_section() -> None:
@@ -746,8 +906,8 @@ def render_historical(briefing_id: str) -> None:
     render_comparison(briefing)
     st.markdown("#### Financial statements")
     render_financials(briefing)
-    st.markdown("#### News and ratings")
-    render_news_and_ratings(briefing)
+    st.markdown("#### News")
+    render_news_feed(briefing, live=False)
 
 
 # --------------------------------------------------------------------------
@@ -778,7 +938,7 @@ def main() -> None:
     if st.session_state.pop("sidebar_opened", False):
         st.toast("Saved briefing opened in the History tab.", icon="📁")
 
-    tabs = st.tabs(["📊 Compare", "📑 Financials", "📰 News & ratings", "📝 Notes & save", "🗂️ History"])
+    tabs = st.tabs(["📊 Compare", "📑 Financials", "📰 News", "📝 Notes & save", "🗂️ History"])
     with tabs[0]:
         if briefing is None:
             st.info("Enter at least two companies above and select **Generate briefing**.")
@@ -791,9 +951,9 @@ def main() -> None:
             render_financials(briefing)
     with tabs[2]:
         if briefing is None:
-            st.info("Generate a briefing to see news and analyst ratings.")
+            st.info("Generate a briefing to see the latest news for its companies.")
         else:
-            render_news_and_ratings(briefing)
+            render_news_feed(briefing, live=True)
     with tabs[3]:
         notes_and_save_section(briefing)
     with tabs[4]:

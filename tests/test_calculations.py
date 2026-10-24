@@ -5,7 +5,17 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from analytics.formatting import format_date, format_money, format_multiple, format_percent, format_timestamp
+from datetime import datetime, timezone
+
+from analytics.formatting import (
+    format_date,
+    format_eps,
+    format_money,
+    format_multiple,
+    format_percent,
+    format_time_ago,
+    format_timestamp,
+)
 from analytics.performance import align_prices, holding_period_returns, normalize_prices
 from analytics.ratios import compute_ratios, growth_rate, safe_divide
 
@@ -125,3 +135,13 @@ def test_balance_sheet_from_a_different_date_is_not_mixed_in():
     ratios, _, _ = compute_ratios(financials)
     assert ratios["return_on_assets"] is None
     assert ratios["net_margin"] == pytest.approx(0.10)
+
+
+def test_time_ago_and_eps():
+    now = datetime(2026, 10, 24, 12, 0, tzinfo=timezone.utc)
+    assert format_time_ago("2026-10-24T11:50:00Z", now) == "10m ago"
+    assert format_time_ago("2026-10-24T09:00:00Z", now) == "3h ago"
+    assert format_time_ago("2026-10-20T12:00:00Z", now) == "4d ago"
+    assert format_time_ago("2026-08-01T12:00:00Z", now) == "01 Aug 2026"
+    assert format_time_ago(None, now) == "N/A"
+    assert format_eps(3.6) == "3.60" and format_eps(None) == "N/A"
