@@ -13,6 +13,10 @@ The deployment is built in stages. Each stage is the same template, extended:
 
 ## Architecture (Stage 2)
 
+![Nimbus AWS network architecture](images/nimbus-aws-architecture.png)
+
+The same in text form (renders on GitHub):
+
 ```mermaid
 flowchart LR
     U([RM browser]) -->|http :8501| IGW[Internet gateway]

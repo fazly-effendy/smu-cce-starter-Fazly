@@ -176,7 +176,7 @@ then reads its JSON snapshot. Reopening never contacts Yahoo.
 │       └── briefing_store.py     # save once / reopen, keeping files and DB in step
 ├── tests/                        # pytest: calculations, parsing, storage, full UI workflow
 ├── notebooks/                    # original notebooks (unchanged)
-├── scripts/                      # nimbus-stack.yaml (deployment), check_database.py, debug_news.py, lesson templates
+├── scripts/                      # nimbus-stack.yaml (deployment), check_database.py, debug_news.py, make_architecture_diagram.py, lesson templates
 ├── docs/aws-deployment.md        # step-by-step AWS deployment and evidence checklist
 ├── lessons/                      # course lesson notes
 ├── requirements.txt              # app dependencies
@@ -341,6 +341,8 @@ many articles Nimbus could read.
 ---
 
 ## Deploying to AWS
+
+![Nimbus AWS network architecture](docs/images/nimbus-aws-architecture.png)
 
 Nimbus is deployed with CloudFormation from [`scripts/nimbus-stack.yaml`](scripts/nimbus-stack.yaml).
 Full steps, evidence checklist, troubleshooting and clean-up are in
