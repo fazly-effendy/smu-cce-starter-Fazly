@@ -8,7 +8,7 @@ search for it and reopen it exactly as it was.
 
 Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 
-> **Status (prototype v0.6.0, local).** Features 1–5 work end to end in
+> **Status (prototype v0.7.0, local).** Features 1–5 work end to end in
 > GitHub Codespaces using SQLite and local files. Moving the database to
 > Amazon RDS and adding auto scaling (Feature 6) are the next stages; see
 > [Project status](#project-status) and [Known limitations](#known-limitations).
@@ -82,8 +82,12 @@ install Jupyter support: `pip install jupyter ipykernel`.
    ago it was published, the summary and a thumbnail where Yahoo provides one.
    **Save to note** keeps an article with the RM note.
 5. **📝 Notes:** fill in the meeting note (any articles you saved are
-   listed), then select **Save briefing and RM notes**. Each briefing can be
-   saved once.
+   listed), then select **💾 Save briefing and RM notes**. You can also save
+   from any tab with **💾 Save briefing** next to the briefing summary: it saves
+   at once if the note is filled in, or opens the note in a pop-up if not. An
+   "Unsaved briefing" marker shows until it is saved; a confirmation appears
+   and the briefing is listed under Recent briefings straight away. Each
+   briefing can be saved once.
 6. **🗂️ History:** filter by ticker, date range, client reference or analysis
    type; choose a result and select **Open briefing**. The five most recent
    briefings are also one click away in the sidebar. A reopened briefing is
@@ -171,7 +175,7 @@ then reads its JSON snapshot. Reopening never contacts Yahoo.
 │       └── briefing_store.py     # save once / reopen, keeping files and DB in step
 ├── tests/                        # pytest: calculations, parsing, storage, full UI workflow
 ├── notebooks/                    # original notebooks (unchanged)
-├── scripts/                      # CloudFormation templates from Lessons 6–7
+├── scripts/                      # CloudFormation templates (Lessons 6–7), debug_news.py
 ├── lessons/                      # course lesson notes
 ├── requirements.txt              # app dependencies
 ├── requirements-dev.txt          # + pytest
@@ -293,6 +297,17 @@ Verified on Python 3.13 (Streamlit 1.66, pandas 3.1, Altair 6) and Python 3.9
 (Streamlit 1.50, pandas 2.3, Altair 5). Python 3.9 is the version on Amazon
 Linux 2023. Streamlit 1.44 or newer is required.
 
+**News troubleshooting.** If the News tab says news could not be retrieved,
+see exactly what Yahoo returns:
+
+```bash
+python scripts/debug_news.py AAPL MSFT
+```
+
+It prints the raw output of yfinance's news feed and of Yahoo search (which
+Nimbus falls back to when the feed is empty), any yfinance warnings, and how
+many articles Nimbus could read.
+
 **Manual check with live data** (run in Codespaces before every demo):
 
 1. Fresh venv, `pip install -r requirements.txt`, start the app.
@@ -341,7 +356,9 @@ briefing files and SQLite on the instance's EBS root volume. This meets the
   missing or change format; Nimbus shows N/A or "not provided" rather than
   guessing. Statement coverage is usually the last four fiscal years.
 - **News** is the latest available at retrieval time; Yahoo does not provide
-  historical news searches.
+  historical news searches. yfinance's news feed returns an empty list rather
+  than an error when Yahoo's news service misbehaves, so Nimbus then tries
+  Yahoo search and reports which source it used, or the real error.
 - **Ratios** use annual statements only (no quarterly or trailing-twelve-month
   figures).
 - **Analyst targets and earnings dates** are third-party figures from Yahoo at

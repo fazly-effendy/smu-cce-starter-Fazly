@@ -60,6 +60,10 @@ CSS = f"""
 .nb-chip.up {{background: rgba(22,163,74,.16); color: #4ADE80;}}
 .nb-chip.down {{background: rgba(220,38,38,.16); color: #F87171;}}
 .nb-chip.neutral {{background: rgba(148,163,184,.16); color: #CBD5E1;}}
+.nb-chip.warn {{background: rgba(245,158,11,.16); color: #FBBF24;}}
+
+/* Primary buttons never truncate their label */
+button[kind="primary"], button[data-testid="stBaseButton-primary"] {{white-space: nowrap; min-width: max-content;}}
 
 /* Small label/value pairs inside company cards */
 .nb-stats {{display: grid; grid-template-columns: 1fr 1fr; gap: .25rem 1rem; margin-top: .35rem;}}
@@ -95,7 +99,7 @@ def esc(text: Optional[str]) -> str:
 
 
 def chip(text: str, tone: str = "accent", tooltip: Optional[str] = None) -> str:
-    """HTML pill. tone: accent | up | down | neutral."""
+    """HTML pill. tone: accent | up | down | neutral | warn."""
     title = f' title="{esc(tooltip)}"' if tooltip else ""
     return f'<span class="nb-chip {tone}"{title}>{esc(text)}</span>'
 

@@ -104,3 +104,40 @@ def test_earnings_after_the_scheduled_date_and_when_missing():
                           index=pd.DatetimeIndex(["2026-01-01"], name="Earnings Date"))
     result = yahoo.extract_earnings({}, missed, later)
     assert result["last_result"] == "miss" and result["last_surprise"] == pytest.approx(-0.25)
+
+
+def test_fetch_news_uses_main_feed_when_it_works():
+    result = yahoo.fetch_news("AAPL")
+    assert result["status"] == "ok" and result["source"] == "Yahoo Finance news" and len(result["items"]) == 2
+
+
+def test_fetch_news_falls_back_to_search_when_feed_is_empty():
+    fake_yahoo.NEWS_FEED_MODE = "empty"
+    result = yahoo.fetch_news("AAPL")
+    assert result["source"] == "Yahoo Finance search"
+    assert [a["uuid"] for a in result["items"]] == ["s1"]  # only articles tagged with AAPL
+    items, skipped = yahoo.parse_news_with_count(result["items"], "AAPL")
+    assert items[0].headline == "Apple supplier outlook improves" and items[0].publisher == "Barron's"
+    assert items[0].thumbnail_url == "https://s.yimg.com/s1-140.jpg" and skipped == 0
+
+
+def test_fetch_news_reports_real_errors_instead_of_no_news():
+    fake_yahoo.NEWS_FEED_MODE = "error"
+    fake_yahoo.SEARCH_ONLINE = False
+    result = yahoo.fetch_news("AAPL")
+    assert result["status"] == "error"
+    assert "news feed failed (ConnectionError: news feed unreachable)" in result["message"]
+    assert "news search failed" in result["message"]
+
+
+def test_fetch_news_genuinely_empty():
+    fake_yahoo.NEWS_FEED_MODE = "empty"
+    result = yahoo.fetch_news("MSFT")  # search has no news for MSFT either
+    assert result["status"] == "empty" and "no articles" in result["message"]
+
+
+def test_malformed_news_items_are_skipped_and_counted():
+    raw = [{"content": {"title": "Good one"}}, {"content": "not a dict"}, None, 42, {"content": {"title": ""}},
+           {"title": "Flat good one", "link": "https://example.com/x"}]
+    items, skipped = yahoo.parse_news_with_count(raw, "X", limit=10)
+    assert [i.headline for i in items] == ["Good one", "Flat good one"] and skipped == 4

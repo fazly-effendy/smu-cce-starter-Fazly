@@ -49,6 +49,8 @@ class CompanySnapshot:
     # Latest analyst recommendation counts, e.g. {"period": "0m", "strongBuy": 9, ...}
     ratings: Optional[Dict[str, object]] = None
     news: List[NewsItem] = field(default_factory=list)
+    # How the news was obtained: {"status": "ok"|"empty"|"error", "source", "message", "skipped"}
+    news_status: Optional[Dict[str, object]] = None
     # Analyst consensus: recommendation, analysts, target_mean/high/low, upside (fraction)
     analyst: Optional[Dict[str, object]] = None
     # Earnings: next_date, next_eps_estimate, last_date, last_eps_estimate, last_eps_actual,

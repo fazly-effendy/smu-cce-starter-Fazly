@@ -109,10 +109,10 @@ def test_acceptance_workflow(isolated_environment):
     calls_before_save = fake_yahoo.data_calls()
 
     # Step 10: save exactly once
-    button(app, "Save briefing and RM notes").click().run()
+    button(app, "💾 Save briefing and RM notes").click().run()
     assert not app.exception, app.exception
     assert any("saved as" in s.value for s in app.success)
-    assert "Save briefing and RM notes" not in [b.label for b in app.button]  # cannot save again
+    assert "💾 Save briefing and RM notes" not in [b.label for b in app.button]  # cannot save again
     app.run()  # an extra rerun must not create a duplicate
     assert fake_yahoo.data_calls() == calls_before_save  # saving does not refetch data
 
@@ -167,7 +167,7 @@ def test_fewer_than_two_tickers_is_refused():
 
 def test_note_requires_reference_and_summary():
     app = generate(start_app(), "AAPL, MSFT")
-    button(app, "Save briefing and RM notes").click().run()
+    button(app, "💾 Save briefing and RM notes").click().run()
     assert any("client or briefing reference" in e.value for e in app.error)
     assert database.count_rows()["briefings"] == 0
 
@@ -267,7 +267,7 @@ def test_recent_briefings_in_sidebar_open_the_saved_briefing():
     key = app.session_state["briefing"].briefing_id
     app.text_input(key=f"ref_{key}").set_value("Sidebar check")
     app.text_area(key=f"summary_{key}").set_value("Summary")
-    button(app, "Save briefing and RM notes").click().run()
+    button(app, "💾 Save briefing and RM notes").click().run()
     recent = [b for b in app.sidebar.button if b.key and b.key.startswith("recent_")]
     assert len(recent) == 1
     recent[0].click().run()
@@ -356,7 +356,7 @@ def test_saved_articles_are_stored_with_the_note_and_reopened(isolated_environme
     key = app.session_state["briefing"].briefing_id
     app.text_input(key=f"ref_{key}").set_value("Article check")
     app.text_area(key=f"summary_{key}").set_value("Summary")
-    button(app, "Save briefing and RM notes").click().run()
+    button(app, "💾 Save briefing and RM notes").click().run()
     assert not any("Save to note" in b.label for b in app.button)  # read-only once saved
 
     row = database.search_briefings()[0]
@@ -365,3 +365,62 @@ def test_saved_articles_are_stored_with_the_note_and_reopened(isolated_environme
 
     restarted = search_and_open(start_app(), "MSFT")
     assert "Saved articles" in " ".join(m.value for m in restarted.markdown)
+
+
+def fill_note(app: AppTest, reference: str = "Header save check", summary: str = "Summary") -> None:
+    key = app.session_state["briefing"].briefing_id
+    app.text_input(key=f"ref_{key}").set_value(reference)
+    app.text_area(key=f"summary_{key}").set_value(summary)
+
+
+def test_header_shows_unsaved_until_saved_then_save_button_saves_and_toasts():
+    app = generate(start_app(), "AAPL, MSFT")
+    assert any("Unsaved briefing" in m.value for m in app.markdown)
+    fill_note(app)
+    next(b for b in app.button if b.key == "header_save").click().run()
+    assert database.count_rows()["briefings"] == 1
+    assert any("✓ Saved" in m.value for m in app.markdown)
+    assert not any(b.key == "header_save" for b in app.button)
+    assert [t.value for t in app.toast][0].startswith("Briefing saved as ")
+    recent = [b.label for b in app.sidebar.button if b.key and b.key.startswith("recent_")]
+    assert len(recent) == 1 and recent[0].startswith("AAPL, MSFT")  # in Recent briefings straight away
+
+
+def test_header_save_with_empty_note_opens_the_note_dialog():
+    app = generate(start_app(), "AAPL, MSFT")
+    next(b for b in app.button if b.key == "header_save").click().run()
+    assert database.count_rows()["briefings"] == 0
+    key = app.session_state["briefing"].briefing_id
+    app.text_input(key=f"dlg_ref_{key}").set_value("From the dialog")
+    app.text_area(key=f"dlg_summary_{key}").set_value("Saved via the header button")
+    next(b for b in app.button if b.label == "💾 Save briefing and RM notes" and b.key != "notes_save").click().run()
+    assert database.count_rows()["briefings"] == 1
+    assert database.search_briefings()[0]["client_reference"] == "From the dialog"
+
+
+def test_dialog_carries_over_what_was_typed_in_the_notes_tab():
+    app = generate(start_app(), "AAPL, MSFT")
+    key = app.session_state["briefing"].briefing_id
+    app.text_input(key=f"ref_{key}").set_value("Typed in Notes")  # summary still empty
+    next(b for b in app.button if b.key == "header_save").click().run()
+    assert app.text_input(key=f"dlg_ref_{key}").value == "Typed in Notes"
+
+
+def test_news_tab_explains_a_failed_fetch_instead_of_no_news():
+    fake_yahoo.NEWS_FEED_MODE = "error"
+    fake_yahoo.SEARCH_ONLINE = False
+    app = generate(start_app(), "AAPL, MSFT")
+    warning = next(w.value for w in app.warning if "News could not be retrieved" in w.value)
+    assert "**AAPL**: news feed failed (ConnectionError: news feed unreachable)" in warning
+    assert "scripts/debug_news.py AAPL MSFT" in warning
+
+
+def test_news_tab_uses_search_fallback_and_says_so():
+    fake_yahoo.NEWS_FEED_MODE = "empty"
+    app = generate(start_app(), "AAPL, MSFT")
+    headlines = [m.value for m in app.markdown if m.value.startswith("**[")]
+    assert headlines == ["**[Apple supplier outlook improves](https://example.com/apple-suppliers)**"]
+    captions = " ".join(c.value for c in app.caption)
+    assert "AAPL: Yahoo's news feed was empty, so articles come from Yahoo search." in captions
+    assert "Yahoo has no recent articles for MSFT." in captions
+    assert any(b.label == "☆ Save to note" for b in app.button)

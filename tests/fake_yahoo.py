@@ -147,6 +147,13 @@ class FakeTicker:
     def news(self):
         return self._get("news", [])
 
+    def get_news(self, count=10, tab="news"):
+        if NEWS_FEED_MODE == "empty":
+            return []
+        if NEWS_FEED_MODE == "error":
+            raise ConnectionError("news feed unreachable")
+        return self.news[:count]
+
     @property
     def calendar(self):
         return self._get("calendar", {}) if self._data and "calendar" in self._data else {}
@@ -188,6 +195,21 @@ SEARCH_RESULTS = {
     ],
 }
 SEARCH_ONLINE = True  # set to False in a test to simulate Yahoo being unreachable
+NEWS_FEED_MODE = "ok"  # "empty" or "error" simulates Yahoo's news feed failing (search still works)
+
+# News from Yahoo's search service (the older flat format), keyed by lower-case query.
+SEARCH_NEWS = {
+    "aapl": [
+        {"uuid": "s1", "title": "Apple supplier outlook improves", "publisher": "Barron's",
+         "link": "https://example.com/apple-suppliers", "providerPublishTime": 1792000000, "type": "STORY",
+         "relatedTickers": ["AAPL", "TSM"],
+         "thumbnail": {"resolutions": [{"url": "https://s.yimg.com/s1-140.jpg", "width": 140, "height": 140,
+                                         "tag": "140x140"}]}},
+        {"uuid": "s2", "title": "Unrelated market wrap", "publisher": "Reuters",
+         "link": "https://example.com/wrap", "providerPublishTime": 1791990000, "relatedTickers": ["SPY"]},
+        {"uuid": "bad"},  # malformed: no title
+    ],
+}
 
 
 class FakeSearch:
@@ -196,6 +218,7 @@ class FakeSearch:
         if not SEARCH_ONLINE:
             raise ConnectionError("Yahoo search unreachable")
         self.quotes = SEARCH_RESULTS.get(query.strip().lower(), [])[:max_results]
+        self.news = SEARCH_NEWS.get(query.strip().lower(), [])[:news_count]
 
 
 class FakeYF:

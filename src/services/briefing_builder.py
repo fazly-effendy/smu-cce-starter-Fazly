@@ -35,9 +35,14 @@ def build_company_snapshot(ticker: str, closes: pd.Series, raw: dict, retrieved_
     warnings = list(raw.get("warnings", []))
     if not financials:
         warnings.append("Yahoo returned no financial statements for this company.")
-    news = yahoo.parse_news(raw.get("news"), ticker, limit=NEWS_ITEMS_PER_TICKER)
-    if not news:
-        warnings.append("Yahoo returned no recent news for this company.")
+    fetched = raw.get("news") if isinstance(raw.get("news"), dict) else {
+        "items": raw.get("news") or [], "source": None, "status": "error" if raw.get("news") is None else "ok",
+        "message": None}
+    news, skipped = yahoo.parse_news_with_count(fetched.get("items"), ticker, limit=NEWS_ITEMS_PER_TICKER)
+    news_status = {"status": fetched.get("status"), "source": fetched.get("source"),
+                   "message": fetched.get("message"), "skipped": skipped}
+    if fetched.get("status") == "ok" and not news:
+        news_status.update(status="error", message=f"Yahoo sent {skipped} news items but none could be read.")
 
     return CompanySnapshot(
         ticker=ticker,
@@ -57,6 +62,7 @@ def build_company_snapshot(ticker: str, closes: pd.Series, raw: dict, retrieved_
         ratios=ratios,
         ratings=yahoo.extract_latest_ratings(raw.get("recommendations")),
         news=news,
+        news_status=news_status,
         analyst=yahoo.extract_analyst_view(raw.get("info"), float(closes.iloc[-1])),
         earnings=yahoo.extract_earnings(raw.get("calendar"), raw.get("earnings_dates"),
                                         datetime.now(timezone.utc).date()),

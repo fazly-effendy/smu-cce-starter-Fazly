@@ -372,10 +372,9 @@ def render_news_feed(briefing: Briefing, live: bool) -> None:
     saved = briefing.briefing_id in st.session_state["saved"]
     pinned = st.session_state["pinned_articles"].get(briefing.briefing_id, [])
     can_pin = live and not saved
+    render_news_status(briefing)
     st.caption(f"{len(items)} {'article' if len(items) == 1 else 'articles'}, newest first"
                + (" · ☆ Save to note keeps an article with your RM note" if can_pin else ""))
-    if not items:
-        st.info("No recent news available from Yahoo Finance.")
 
     for item in items:
         with st.container(border=True):
@@ -399,6 +398,33 @@ def render_news_feed(briefing: Briefing, live: bool) -> None:
     notes = [f"{company.ticker}: {md_text(w)}" for company in briefing.companies for w in company.warnings]
     if notes:
         st.caption("Notes: " + " · ".join(notes))
+
+
+def render_news_status(briefing: Briefing) -> None:
+    """Say why news is missing (fetch error vs. genuinely none) in one compact notice."""
+    failed, empty, fallback, skipped = [], [], [], 0
+    for company in briefing.companies:
+        status = company.news_status or {}
+        skipped += status.get("skipped") or 0
+        if status.get("status") == "error":
+            failed.append(f"**{company.ticker}**: {md_text(status.get('message') or 'unknown error')}")
+        elif status.get("status") == "empty" or (status and not company.news):
+            empty.append(company.ticker)
+        elif status.get("source") == "Yahoo Finance search":
+            fallback.append(company.ticker)
+    if failed:
+        st.warning("News could not be retrieved for some companies:  \n" + "  \n".join(failed)
+                   + "  \nTry generating again in a few minutes; run `python scripts/debug_news.py "
+                   + " ".join(c.ticker for c in briefing.companies) + "` to see Yahoo's raw response.")
+    notes = []
+    if empty:
+        notes.append(f"Yahoo has no recent articles for {', '.join(empty)}.")
+    if fallback:
+        notes.append(f"{', '.join(fallback)}: Yahoo's news feed was empty, so articles come from Yahoo search.")
+    if skipped:
+        notes.append(f"{skipped} malformed article{'s' if skipped != 1 else ''} skipped.")
+    if notes:
+        st.caption(" ".join(notes))
 
 
 def render_note(note: Optional[RmNote]) -> None:
@@ -544,10 +570,10 @@ def generate_section() -> None:
     with st.container(border=True):
         html_block('<div class="nb-card-title">New briefing</div>')
         company_picker()
-        period_col, button_col, _ = st.columns([1.3, 1.1, 3.6], vertical_alignment="bottom")
+        period_col, button_col, _ = st.columns([1.4, 1.6, 3], vertical_alignment="bottom")
         period_label = period_col.selectbox("Price period", list(ANALYSIS_PERIODS), key="period_label",
                                             help="Period for the share-price chart and returns")
-        clicked = button_col.button("Generate briefing", type="primary", width="stretch")
+        clicked = button_col.button("Generate briefing", type="primary", width="content")
 
     if not clicked:
         return
@@ -579,30 +605,35 @@ def pinned_articles(briefing: Briefing) -> List[Dict[str, Optional[str]]]:
     ]
 
 
-def save_from_form(briefing: Briefing) -> None:
-    """'Save briefing and RM notes' click handler.
+NOTE_FIELDS = ("ref", "meeting", "summary", "priorities", "actions", "review", "other")
 
-    Runs before the page is redrawn, so the whole page (including the News tab's
-    Save to note buttons) is drawn once, already in its saved state. This avoids
-    relying on st.rerun(), which older Streamlit versions do not always honour.
-    """
-    key = briefing.briefing_id
+
+def note_values(briefing: Briefing, prefix: str = "") -> Dict[str, object]:
+    """Current values of the note fields (prefix "" = Notes tab form, "dlg_" = save dialog)."""
+    return {field: st.session_state.get(f"{prefix}{field}_{briefing.briefing_id}") for field in NOTE_FIELDS}
+
+
+def note_is_complete(values: Dict[str, object]) -> bool:
+    return bool((values.get("ref") or "").strip() and (values.get("summary") or "").strip())
+
+
+def perform_save(briefing: Briefing, values: Dict[str, object]) -> bool:
+    """Save the briefing with the RM note built from `values`. Runs inside click handlers, i.e.
+    before the page is redrawn, so the sidebar's Recent briefings and the header show the saved
+    state straight away. Returns True on success."""
     state = st.session_state
-    client_reference = (state.get(f"ref_{key}") or "").strip()
-    discussion_summary = (state.get(f"summary_{key}") or "").strip()
-    if not client_reference or not discussion_summary:
+    if not note_is_complete(values):
         state["save_error"] = "Please enter a client or briefing reference and a discussion summary before saving."
-        return
-    meeting_date = state.get(f"meeting_{key}")
-    next_review_date = state.get(f"review_{key}")
+        return False
+    meeting_date, review_date = values.get("meeting"), values.get("review")
     note = RmNote(
-        client_reference=client_reference,
+        client_reference=values["ref"].strip(),
         meeting_date=meeting_date.isoformat() if meeting_date else None,
-        discussion_summary=discussion_summary,
-        client_priorities=(state.get(f"priorities_{key}") or "").strip(),
-        follow_up_actions=(state.get(f"actions_{key}") or "").strip(),
-        next_review_date=next_review_date.isoformat() if next_review_date else None,
-        free_text=(state.get(f"other_{key}") or "").strip(),
+        discussion_summary=values["summary"].strip(),
+        client_priorities=(values.get("priorities") or "").strip(),
+        follow_up_actions=(values.get("actions") or "").strip(),
+        next_review_date=review_date.isoformat() if review_date else None,
+        free_text=(values.get("other") or "").strip(),
         created_at=utc_now_iso(),
         saved_articles=pinned_articles(briefing),
     )
@@ -610,10 +641,84 @@ def save_from_form(briefing: Briefing) -> None:
         result = briefing_store.save_briefing(briefing, note)
     except Exception as exc:
         state["save_error"] = f"The briefing could not be saved: {exc}"
-        return
-    state["saved"][key] = result.filename
+        return False
+    state["saved"][briefing.briefing_id] = result.filename
     state["saved_note"] = result.briefing.note or note
     state.pop("save_error", None)
+    state["toast"] = f"Briefing saved as {result.filename}"
+    return True
+
+
+def save_from_form(briefing: Briefing) -> None:
+    """'Save briefing and RM notes' in the Notes tab."""
+    perform_save(briefing, note_values(briefing))
+
+
+def save_from_header(briefing: Briefing) -> None:
+    """'💾 Save briefing' in the header: save at once if the note is filled in, else open the note dialog."""
+    values = note_values(briefing)
+    if note_is_complete(values):
+        perform_save(briefing, values)
+    else:
+        st.session_state["open_note_dialog"] = briefing.briefing_id
+
+
+def save_from_dialog(briefing: Briefing) -> None:
+    if not perform_save(briefing, note_values(briefing, prefix="dlg_")):
+        st.session_state["open_note_dialog"] = briefing.briefing_id  # keep the dialog open to show the error
+
+
+def note_fields(briefing: Briefing, prefix: str = "", prefill: Optional[Dict[str, object]] = None) -> None:
+    """The RM note inputs. The dialog (prefix "dlg_") starts from what was typed in the Notes tab."""
+    key = briefing.briefing_id
+    prefill = prefill or {}
+
+    def k(field: str) -> str:
+        return f"{prefix}{field}_{key}"
+
+    left, right = st.columns(2)
+    left.text_input("Client or briefing reference *", placeholder="e.g. Acme Holdings – Q4 review", key=k("ref"),
+                    value=prefill.get("ref") or "")
+    right.date_input("Meeting date", value=prefill.get("meeting") or date.today(), key=k("meeting"))
+    st.text_area("Discussion summary *", placeholder="What was discussed with the client?", key=k("summary"),
+                 value=prefill.get("summary") or "")
+    left, right = st.columns(2)
+    left.text_area("Client priorities or concerns", key=k("priorities"), value=prefill.get("priorities") or "")
+    right.text_area("Follow-up actions", key=k("actions"), value=prefill.get("actions") or "")
+    left, right = st.columns([1, 3])
+    left.date_input("Next review date (optional)", value=prefill.get("review"), key=k("review"))
+    right.text_area("Other notes (optional)", key=k("other"), height=68, value=prefill.get("other") or "")
+
+
+@st.dialog("Save briefing", width="large")
+def note_dialog(briefing: Briefing) -> None:
+    st.caption("Add the required note fields (*) to save this briefing. Anything typed in the Notes tab is "
+               "carried over.")
+    error = st.session_state.pop("save_error", None)
+    if error:
+        st.error(error)
+    with st.form(f"dlg_note_form_{briefing.briefing_id}"):
+        note_fields(briefing, prefix="dlg_", prefill=note_values(briefing))
+        st.form_submit_button("💾 Save briefing and RM notes", type="primary", on_click=save_from_dialog,
+                              args=(briefing,))
+
+
+def briefing_header(briefing: Briefing) -> None:
+    """Summary line, saved/unsaved indicator and a Save button that is visible from every tab."""
+    saved = st.session_state["saved"].get(briefing.briefing_id)
+    info_col, status_col, button_col = st.columns([5, 1.2, 1.6], vertical_alignment="center")
+    info_col.caption(f"Briefing for {', '.join(briefing.successful_tickers)} · generated "
+                     f"{format_timestamp(briefing.created_at)} · price period {briefing.analysis_period}")
+    if saved:
+        status_col.markdown(chip("✓ Saved", "up", tooltip=saved), unsafe_allow_html=True)
+    else:
+        status_col.markdown(chip("● Unsaved briefing", "warn",
+                                 tooltip="Not saved yet. Save to keep it in Briefing history."),
+                            unsafe_allow_html=True)
+        button_col.button("💾 Save briefing", type="primary", key="header_save", width="content",
+                          on_click=save_from_header, args=(briefing,))
+    if st.session_state.pop("open_note_dialog", None) == briefing.briefing_id:
+        note_dialog(briefing)
 
 
 def notes_and_save_section(briefing: Optional[Briefing]) -> None:
@@ -641,21 +746,12 @@ def notes_and_save_section(briefing: Optional[Briefing]) -> None:
     else:
         st.caption("Tip: use **Save to note** in the News tab to keep relevant articles with this note.")
 
-    key = briefing.briefing_id  # fresh, empty note fields for every new briefing
-    with st.form(f"rm_note_form_{key}"):
-        left, right = st.columns(2)
-        left.text_input("Client or briefing reference *", placeholder="e.g. Acme Holdings – Q4 review",
-                        key=f"ref_{key}")
-        right.date_input("Meeting date", value=date.today(), key=f"meeting_{key}")
-        st.text_area("Discussion summary *", placeholder="What was discussed with the client?", key=f"summary_{key}")
-        left, right = st.columns(2)
-        left.text_area("Client priorities or concerns", key=f"priorities_{key}")
-        right.text_area("Follow-up actions", key=f"actions_{key}")
-        left, right = st.columns([1, 3])
-        left.date_input("Next review date (optional)", value=None, key=f"review_{key}")
-        right.text_area("Other notes (optional)", key=f"other_{key}", height=68)
-        st.form_submit_button("Save briefing and RM notes", type="primary", on_click=save_from_form,
-                              args=(briefing,))
+    # Plain inputs (not an st.form), so what the RM types is always available to the header's
+    # Save button and the save dialog, not only after this tab's own button is pressed.
+    with st.container(border=True):
+        note_fields(briefing)
+        st.button("💾 Save briefing and RM notes", type="primary", key="notes_save", on_click=save_from_form,
+                  args=(briefing,))
 
     error = st.session_state.pop("save_error", None)
     if error:
@@ -790,10 +886,11 @@ def main() -> None:
     if briefing is not None:
         render_notices(briefing)
         if briefing.companies:
-            st.caption(
-                f"Briefing for {', '.join(briefing.successful_tickers)} · generated "
-                f"{format_timestamp(briefing.created_at)} · share-price period {briefing.analysis_period}"
-            )
+            briefing_header(briefing)
+
+    toast = st.session_state.pop("toast", None)
+    if toast:
+        st.toast(toast, icon="✅")
 
     if st.session_state.pop("sidebar_opened", False):
         st.toast("Saved briefing opened in the History tab.", icon="📁")

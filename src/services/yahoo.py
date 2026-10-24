@@ -12,10 +12,11 @@ Two kinds of function:
 from __future__ import annotations
 
 import html
+import logging
 import math
 import re
 from datetime import date, datetime, timezone
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 import yfinance as yf
@@ -73,6 +74,59 @@ def fetch_price_history(ticker: str, period: str) -> pd.Series:
     return closes.astype(float)
 
 
+class _LogCapture(logging.Handler):
+    """Collects warnings and errors that yfinance logs instead of raising."""
+
+    def __init__(self):
+        super().__init__(level=logging.WARNING)
+        self.messages: List[str] = []
+
+    def emit(self, record):
+        self.messages.append(record.getMessage())
+
+
+def fetch_news(ticker: str, count: int = 10) -> dict:
+    """Recent news for a ticker, with an honest account of what happened.
+
+    yfinance's news feed returns an empty list (rather than an error) when Yahoo's
+    news service answers unexpectedly, so this tries two routes:
+    1. Ticker.get_news() - Yahoo's ticker news feed;
+    2. Search(ticker).news - Yahoo's search service, a separate endpoint.
+    Returns {"items": raw items, "source": which route worked, "status": "ok" |
+    "empty" | "error", "message": explanation or None}.
+    """
+    logger = logging.getLogger("yfinance")
+    capture = _LogCapture()
+    logger.addHandler(capture)
+    problems: List[str] = []
+    try:
+        try:
+            items = yf.Ticker(ticker).get_news(count=count, tab="news") or []
+        except Exception as exc:
+            items = []
+            problems.append(f"news feed failed ({exc.__class__.__name__}: {exc})")
+        if items:
+            return {"items": list(items), "source": "Yahoo Finance news", "status": "ok", "message": None}
+        try:
+            found = yf.Search(ticker, max_results=1, news_count=count).news or []
+        except Exception as exc:
+            found = []
+            problems.append(f"news search failed ({exc.__class__.__name__}: {exc})")
+        related = [a for a in found if isinstance(a, dict)
+                   and ticker.upper() in [str(t).upper() for t in a.get("relatedTickers") or []]]
+        found = related or found
+        if found:
+            return {"items": list(found), "source": "Yahoo Finance search", "status": "ok",
+                    "message": "Yahoo's news feed returned nothing, so these articles come from Yahoo search."}
+    finally:
+        logger.removeHandler(capture)
+    problems += [f"yfinance: {message}" for message in capture.messages[:3]]
+    if problems:
+        return {"items": [], "source": None, "status": "error", "message": "; ".join(problems)}
+    return {"items": [], "source": None, "status": "empty",
+            "message": "Yahoo returned no articles from either its news feed or its search service."}
+
+
 def search_quotes(query: str, max_results: int = 8) -> List[dict]:
     """Yahoo Finance search results for a company name or ticker.
 
@@ -94,7 +148,7 @@ def fetch_company_data(ticker: str) -> dict:
         "balance_sheet": lambda: stock.balance_sheet,
         "cash_flow": lambda: stock.cashflow,
         "recommendations": lambda: stock.recommendations,
-        "news": lambda: stock.news,
+        "news": lambda: fetch_news(ticker),
         "calendar": lambda: stock.calendar,
         "earnings_dates": lambda: stock.get_earnings_dates(limit=8),
     }
@@ -235,44 +289,62 @@ def _published_from(content: dict, article: dict) -> Optional[str]:
     return None
 
 
-def parse_news(raw_news: Optional[Iterable], ticker: str, limit: int = 5) -> List[NewsItem]:
-    """Turn Yahoo news items into NewsItem records.
+def _parse_article(article, ticker: str) -> Optional[NewsItem]:
+    """One Yahoo news item -> NewsItem, or None if it has no headline."""
+    if not isinstance(article, dict):
+        return None
+    content = article.get("content") if isinstance(article.get("content"), dict) else {}
+    headline = _clean_text(content.get("title") or article.get("title"))
+    if not headline:
+        return None
+    summary = _clean_text(content.get("summary")) or _clean_text(content.get("description")) \
+        or _clean_text(article.get("summary"))
+    provider = content.get("provider") if isinstance(content.get("provider"), dict) else {}
+    publisher = provider.get("displayName") or article.get("publisher")
+    url = (
+        _url_from(content.get("canonicalUrl"))
+        or _url_from(content.get("clickThroughUrl"))
+        or _url_from(article.get("link"))
+    )
+    return NewsItem(
+        ticker=ticker,
+        headline=headline,
+        summary=_shorten(summary),
+        publisher=publisher if isinstance(publisher, str) and publisher else None,
+        published_at=_published_from(content, article),
+        source_url=url,
+        thumbnail_url=_thumbnail_from(content, article),
+    )
 
-    Handles both Yahoo formats: the current one (fields nested under
-    "content") and the older flat one. Nothing is invented: a missing summary
-    or link stays None and is shown as unavailable.
+
+def parse_news_with_count(raw_news: Optional[Iterable], ticker: str, limit: int = 5) -> Tuple[List[NewsItem], int]:
+    """Parse Yahoo news items in either format. Returns (items, number of malformed items skipped).
+
+    Formats: the current one nests fields under "content" (title, summary, pubDate,
+    provider.displayName, canonicalUrl.url, thumbnail.resolutions); the older/search
+    one is flat (title, publisher, link, providerPublishTime, thumbnail). One broken
+    item is skipped and counted; it never stops the others.
     """
     items: List[NewsItem] = []
+    skipped = 0
     for article in raw_news or []:
-        if not isinstance(article, dict):
+        try:
+            item = _parse_article(article, ticker)
+        except Exception:
+            item = None
+        if item is None:
+            skipped += 1
             continue
-        content = article.get("content") if isinstance(article.get("content"), dict) else {}
-        headline = _clean_text(content.get("title") or article.get("title"))
-        if not headline:
-            continue
-        summary = _clean_text(content.get("summary")) or _clean_text(content.get("description")) \
-            or _clean_text(article.get("summary"))
-        provider = content.get("provider") if isinstance(content.get("provider"), dict) else {}
-        publisher = provider.get("displayName") or article.get("publisher")
-        url = (
-            _url_from(content.get("canonicalUrl"))
-            or _url_from(content.get("clickThroughUrl"))
-            or _url_from(article.get("link"))
-        )
-        items.append(
-            NewsItem(
-                ticker=ticker,
-                headline=headline,
-                summary=_shorten(summary),
-                publisher=publisher if isinstance(publisher, str) and publisher else None,
-                published_at=_published_from(content, article),
-                source_url=url,
-                thumbnail_url=_thumbnail_from(content, article),
-            )
-        )
+        items.append(item)
         if len(items) >= limit:
             break
-    return items
+    return items, skipped
+
+
+def parse_news(raw_news: Optional[Iterable], ticker: str, limit: int = 5) -> List[NewsItem]:
+    """Turn Yahoo news items into NewsItem records. Nothing is invented: a missing
+    summary or link stays None and is shown as unavailable."""
+    return parse_news_with_count(raw_news, ticker, limit)[0]
 
 
 def quote_url(ticker: str) -> str:
