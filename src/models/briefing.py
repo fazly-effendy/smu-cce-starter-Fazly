@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # 2: adds price_history (actual prices for chart tooltips)
 ANALYSIS_TYPE = "company_briefing"
 
 
@@ -78,6 +78,8 @@ class Briefing:
     companies: List[CompanySnapshot]
     # Normalized share prices (first common date = 100): ticker -> {date: value}
     price_index: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    # Adjusted closing prices on the same common dates: ticker -> {date: price}
+    price_history: Dict[str, Dict[str, float]] = field(default_factory=dict)
     # Holding-period return over the common date range: ticker -> fraction
     holding_period_returns: Dict[str, Optional[float]] = field(default_factory=dict)
     price_window: Optional[List[str]] = None  # [first date, last date]

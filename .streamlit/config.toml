@@ -1,0 +1,10 @@
+# Nimbus look and feel. Streamlit reads this file when the app is started
+# from the repository root (python3 -m streamlit run src/app.py), locally and
+# on EC2.
+
+[theme]
+# One accent colour for buttons, links, focus outlines and the first chart line.
+primaryColor = "#2563EB"
+
+[browser]
+gatherUsageStats = false

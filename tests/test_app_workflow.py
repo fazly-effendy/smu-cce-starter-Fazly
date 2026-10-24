@@ -69,7 +69,9 @@ def test_acceptance_workflow(isolated_environment):
     # Step 6: normalized price comparison (data behind the chart) and returns
     assert set(briefing.price_index) == {"AAPL", "MSFT"}
     assert all(next(iter(series.values())) == 100.0 for series in briefing.price_index.values())
-    assert [m.delta for m in app.metric] == ["14.5% over 1 year", "-7.0% over 1 year"]
+    assert [m.delta for m in app.metric if m.delta] == ["14.5% · 1 year", "-7.0% · 1 year"]
+    assert [m.value for m in app.metric if m.label == "P/E (trailing)"] == ["33.5x", "N/A"]
+    assert set(briefing.price_history) == {"AAPL", "MSFT"}  # actual prices for chart tooltips
 
     # Step 7: normalized financial comparison, formatted, N/A for missing inputs
     table = comparison_values(app)
@@ -134,15 +136,17 @@ def test_acceptance_workflow(isolated_environment):
 def test_invalid_ticker_is_reported_and_valid_ones_continue():
     # Step 17
     app = generate(start_app(), "AAPL, ZZZZ, MSFT")
-    warnings = " ".join(w.value for w in app.warning)
-    assert "ZZZZ" in warnings and "No price data found" in warnings
+    notice = [e for e in app.expander if "not included" in e.label]
+    assert len(notice) == 1 and "1 entry was not included" in notice[0].label
+    assert "ZZZZ" in notice[0].markdown[0].value
+    assert not app.warning  # one collapsible notice instead of stacked warning boxes
     assert app.session_state["briefing"].successful_tickers == ["AAPL", "MSFT"]
     assert list(comparison_values(app).columns) == ["AAPL", "MSFT"]
 
 
 def test_all_tickers_invalid_shows_error_without_crashing():
     app = generate(start_app(), "ZZZZ, YYYY")
-    assert any("None of the tickers" in e.value for e in app.error)
+    assert any("None of the companies" in e.value for e in app.error)
 
 
 def test_fewer_than_two_tickers_is_refused():
@@ -174,3 +178,49 @@ def test_regenerating_within_cache_window_reuses_data(tickers):
     calls = fake_yahoo.total_calls()
     button(app, "Generate briefing").click().run()
     assert fake_yahoo.total_calls() == calls  # served from the 15-minute cache
+
+
+def test_company_names_and_full_stop_separators_are_understood():
+    app = generate(start_app(), "Apple . Microsoft")
+    assert app.session_state["briefing"].successful_tickers == ["AAPL", "MSFT"]
+    assert any("Apple → **AAPL**" in c.value for c in app.caption)
+
+
+def test_misspelt_company_gets_a_suggestion():
+    app = generate(start_app(), "AAPL, MSFT, Microsft")  # misspelt: treated as a symbol, not found
+    notice = next(e for e in app.expander if "not included" in e.label)
+    assert "**MICROSFT**" in notice.markdown[0].value
+    assert "Did you mean **MSFT**?" in notice.markdown[0].value
+
+
+def test_preview_badges_show_parsed_tickers_before_generating():
+    app = start_app()
+    text_input(app, "Companies").set_value("Apple, msft; Nvidia").run()
+    preview = next(m.value for m in app.markdown if m.value.startswith("Will compare:"))
+    assert ":blue-badge[AAPL]" in preview and ":blue-badge[MSFT]" in preview and ":blue-badge[NVDA]" in preview
+    assert app.session_state["briefing"] is None  # previewing does not retrieve any data
+    assert fake_yahoo.total_calls() == 0
+
+
+def test_quick_add_appends_a_ticker():
+    app = start_app()
+    next(b for b in app.button if b.key == "quick_NVDA").click().run()
+    assert app.session_state["ticker_text"] == "AAPL, MSFT, NVDA"
+
+
+def test_single_company_shows_add_another_prompt():
+    app = generate(start_app(), "AAPL, ZZZZ")
+    assert any("Add another ticker to compare" in m.value for m in app.markdown)
+
+
+def test_recent_briefings_in_sidebar_open_the_saved_briefing():
+    app = generate(start_app(), "AAPL, MSFT")
+    key = app.session_state["briefing"].briefing_id
+    app.text_input(key=f"ref_{key}").set_value("Sidebar check")
+    app.text_area(key=f"summary_{key}").set_value("Summary")
+    button(app, "Save briefing and RM notes").click().run()
+    recent = [b for b in app.sidebar.button if b.key and b.key.startswith("recent_")]
+    assert len(recent) == 1
+    recent[0].click().run()
+    assert app.session_state["open_briefing_id"] == key
+    assert any("Historical snapshot" in i.value for i in app.info)

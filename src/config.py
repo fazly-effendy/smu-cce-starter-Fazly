@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "Nimbus"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA_DIR = PROJECT_ROOT / "analyses-data"

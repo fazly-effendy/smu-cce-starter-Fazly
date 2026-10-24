@@ -9,16 +9,6 @@ import fake_yahoo
 from services import yahoo
 
 
-def test_parse_tickers_trims_uppercases_and_deduplicates():
-    assert yahoo.parse_tickers(" aapl, MSFT ,aapl;mu  ") == (["AAPL", "MSFT", "MU"], [])
-
-
-def test_parse_tickers_rejects_invalid_entries():
-    valid, rejected = yahoo.parse_tickers("AAPL, $$$, BRK-B, 7203.T")
-    assert valid == ["AAPL", "BRK-B", "7203.T"]
-    assert rejected == ["$$$"]
-
-
 def test_unknown_ticker_raises_clear_error():
     with pytest.raises(yahoo.TickerNotFoundError, match="ZZZZ"):
         yahoo.fetch_price_history("ZZZZ", "1y")

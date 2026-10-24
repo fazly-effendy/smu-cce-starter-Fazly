@@ -8,7 +8,7 @@ search for it and reopen it exactly as it was.
 
 Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 
-> **Status (prototype v0.2.0, local).** Features 1–5 work end to end in
+> **Status (prototype v0.3.0, local).** Features 1–5 work end to end in
 > GitHub Codespaces using SQLite and local files. Moving the database to
 > Amazon RDS and adding auto scaling (Feature 6) are the next stages; see
 > [Project status](#project-status) and [Known limitations](#known-limitations).
@@ -56,19 +56,24 @@ install Jupyter support: `pip install jupyter ipykernel`.
 
 ## Using Nimbus: the demo flow
 
-1. **New briefing:** enter two or more tickers (e.g. `AAPL, MSFT`), choose a
-   share-price period and select **Generate briefing**.
-2. **📊 Company comparison:** growth rates, margins and ratios side by side,
-   plus a share-price chart where every company starts at 100.
+1. **New briefing:** type tickers or company names (e.g. `Apple, Microsoft`
+   or `AAPL MSFT`), or use **Quick add** in the sidebar. Press Enter to see the
+   companies as badges, choose a share-price period and select **Generate
+   briefing**. Anything that could not be used is listed in one collapsible
+   notice, with a suggestion where possible.
+2. **📊 Compare:** a card per company (last close with period return, market
+   cap, P/E), the financial comparison table, and an interactive share-price
+   chart rebased to 100 (hover for date and actual price).
 3. **📑 Financials:** annual statement line items, formatted in millions,
    billions or trillions.
 4. **📰 News & ratings:** analyst recommendation counts and recent news, each
    with publisher, date, summary and a link to the source.
-5. **📝 RM notes & save:** fill in the meeting note, then select **Save
+5. **📝 Notes & save:** fill in the meeting note, then select **Save
    briefing and RM notes**. Each briefing can be saved once.
-6. **🗂️ Briefing history:** filter by ticker, date range, client reference or
-   analysis type; choose a result and select **Open briefing**. The reopened
-   briefing is labelled as a historical snapshot and is never refreshed.
+6. **🗂️ History:** filter by ticker, date range, client reference or analysis
+   type; choose a result and select **Open briefing**. The five most recent
+   briefings are also one click away in the sidebar. A reopened briefing is
+   labelled as a historical snapshot and is never refreshed.
 
 ---
 
@@ -79,7 +84,7 @@ criteria are from the Lesson 5 slides.
 
 | # | Feature | What Nimbus does | Status |
 |---|---|---|---|
-| 1 | Unified UI | One app combining financials, news and price/ratings; numbers formatted ($416.16B, 12.3%); news shows summary, publisher, date and source link | ✅ Working locally |
+| 1 | Unified UI | One app combining financials, news and price/ratings; numbers formatted ($416.16B, 12.3%); news shows summary, publisher, date and source link; accepts company names as well as tickers | ✅ Working locally |
 | 2 | Company comparison | Two or more companies; revenue and net-income growth, net margin, return on assets, debt-to-assets, P/E, market cap; rebased share-price chart and holding-period return | ✅ Working locally |
 | 3 | Storage: save analysis | Complete briefing saved as a Markdown file (plus JSON snapshot) in `analyses-data/`; listed and reopened without re-downloading | ✅ Working locally; on EC2 the folder is on the instance's EBS volume |
 | 4 | Storage: RM notes | Structured meeting note saved with, and linked to, its briefing | ✅ Working locally |
@@ -136,6 +141,7 @@ then reads its JSON snapshot. Reopening never contacts Yahoo.
 │   ├── models/briefing.py        # Briefing, CompanySnapshot, NewsItem, RmNote
 │   ├── services/
 │   │   ├── yahoo.py              # all yfinance calls and parsing (from the notebooks)
+│   │   ├── ticker_input.py       # company names / separators -> ticker symbols
 │   │   └── briefing_builder.py   # combines several companies into one briefing
 │   ├── analytics/
 │   │   ├── ratios.py             # growth rates and financial ratios
@@ -151,6 +157,7 @@ then reads its JSON snapshot. Reopening never contacts Yahoo.
 ├── lessons/                      # course lesson notes
 ├── requirements.txt              # app dependencies
 ├── requirements-dev.txt          # + pytest
+├── .streamlit/config.toml        # theme: one accent colour (#2563EB)
 ├── .env.example                  # configuration variable names (no secrets)
 └── .gitignore                    # excludes .venv/, analyses-data/, *.db, .env
 ```
@@ -262,13 +269,14 @@ They cover:
   the full acceptance workflow: generate → compare → note → save → search →
   reopen → restart → reopen → invalid ticker.
 
-Verified on Python 3.13 (Streamlit 1.66, pandas 3.1) and Python 3.9 (Streamlit
-1.50, pandas 2.3). Python 3.9 is the version on Amazon Linux 2023.
+Verified on Python 3.13 (Streamlit 1.66, pandas 3.1, Altair 6) and Python 3.9
+(Streamlit 1.50, pandas 2.3, Altair 5). Python 3.9 is the version on Amazon
+Linux 2023. Streamlit 1.44 or newer is required.
 
 **Manual check with live data** (run in Codespaces before every demo):
 
 1. Fresh venv, `pip install -r requirements.txt`, start the app.
-2. Enter `AAPL, MSFT`, generate.
+2. Enter `Apple, Microsoft`, press Enter (badges show AAPL and MSFT), generate.
 3. Check the chart, comparison table and formatted financials.
 4. Check that news shows links, publishers and dates.
 5. Enter a note and save. The save button disappears and the filename is shown.
@@ -321,6 +329,12 @@ briefing files and SQLite on the instance's EBS root volume. This meets the
 - **No user accounts:** everyone using an instance sees the same history.
 - **Analysis type** is always `company_briefing` in this version; the filter
   exists so other analysis types can be added later.
+- **Company-name lookup** uses a built-in list of about 90 well-known names
+  (US large caps and major SGX stocks). Other companies must be entered by
+  ticker; misspellings get a suggestion where one is close.
+- **Windows:** keep the project outside Google Drive, OneDrive or Dropbox
+  folders. Cloud-synced folders lock files and cause "Permission denied"
+  errors (and can corrupt `.git`).
 
 ---
 

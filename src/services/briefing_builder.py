@@ -95,6 +95,10 @@ def build_briefing(
         ticker: {date.strftime("%Y-%m-%d"): round(float(value), 4) for date, value in normalized[ticker].items()}
         for ticker in normalized.columns
     }
+    price_history = {
+        ticker: {date.strftime("%Y-%m-%d"): round(float(value), 4) for date, value in aligned[ticker].items()}
+        for ticker in normalized.columns
+    }
     window = (
         [aligned.index[0].strftime("%Y-%m-%d"), aligned.index[-1].strftime("%Y-%m-%d")]
         if len(aligned) >= 2
@@ -108,6 +112,7 @@ def build_briefing(
         tickers=list(tickers),
         companies=companies,
         price_index=price_index,
+        price_history=price_history,
         holding_period_returns=holding_period_returns(aligned) if window else {},
         price_window=window,
         failed_tickers=failed,

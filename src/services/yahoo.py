@@ -23,7 +23,6 @@ import yfinance as yf
 from models.briefing import NewsItem
 
 SOURCE_NAME = "Yahoo Finance (via yfinance)"
-_TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.\-^=]{0,14}$")
 _TAG_PATTERN = re.compile(r"<[^>]+>")
 
 # Statement line items shown in the briefing: display name -> Yahoo row names
@@ -47,29 +46,6 @@ CASHFLOW_ITEMS = {
 
 class TickerNotFoundError(ValueError):
     """Raised when Yahoo returns no price data for a ticker."""
-
-
-# --------------------------------------------------------------------------
-# Input handling
-# --------------------------------------------------------------------------
-
-def parse_tickers(text: str) -> tuple[List[str], List[str]]:
-    """Split user input into unique valid tickers and rejected entries.
-
-    "aapl, msft  ,AAPL" -> (["AAPL", "MSFT"], [])
-    Commas, spaces and semicolons all separate tickers; order is preserved.
-    """
-    valid: List[str] = []
-    rejected: List[str] = []
-    for raw in re.split(r"[,\s;]+", text or ""):
-        ticker = raw.strip().upper()
-        if not ticker:
-            continue
-        if not _TICKER_PATTERN.match(ticker):
-            rejected.append(raw.strip())
-        elif ticker not in valid:
-            valid.append(ticker)
-    return valid, rejected
 
 
 # --------------------------------------------------------------------------
