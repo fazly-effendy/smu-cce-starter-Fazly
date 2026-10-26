@@ -1,0 +1,373 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Nimbus (DS600) - Stage 2. A VPC with public and private subnets in two
+  Availability Zones; Amazon RDS for MySQL in the private subnets, reachable
+  only from the app server's security group; and one EC2 instance that clones
+  Nimbus from GitHub, installs it with EC2 user data, connects it to RDS and
+  runs it as a service on port 8501. Region: us-east-1 (AWS Academy Sandbox).
+
+# ---------------------------------------------------------------------------
+# Parameters: values chosen when the stack is created
+# ---------------------------------------------------------------------------
+Parameters:
+  GitHubRepoUrl:
+    Type: String
+    Default: https://github.com/fazly-effendy/smu-cce-starter-Fazly.git
+    Description: Public Git repository that holds Nimbus.
+  GitBranch:
+    Type: String
+    Default: main
+    Description: Branch to deploy (e.g. feature/unified-nimbus-prototype before it is merged).
+  ImageId:
+    Type: AWS::EC2::Image::Id
+    Default: ami-0fef201115eefe936
+    Description: Amazon Linux 2023 AMI used in Lessons 6 and 7 (us-east-1).
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues: [t2.micro, t3.micro, t3.small]
+    Description: EC2 instance size.
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: vockey
+    Description: Existing key pair (the Sandbox provides vockey).
+  AllowedWebCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: Who may open Nimbus on port 8501. 0.0.0.0/0 = anyone (needed for a class demo).
+  AllowedSshCidr:
+    Type: String
+    Default: 127.0.0.1/32
+    Description: >
+      Who may SSH to the instance. Closed by default (127.0.0.1/32); use the EC2 system log for
+      troubleshooting, or set this to your own IP followed by /32 if you need SSH.
+  DBUsername:
+    Type: String
+    Default: nimbusadmin
+    MinLength: 1
+    MaxLength: 16
+    AllowedPattern: "[a-zA-Z][a-zA-Z0-9]*"
+    ConstraintDescription: Letters and digits only, starting with a letter (1-16 characters).
+    Description: Master username for the RDS database.
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 41
+    AllowedPattern: "[a-zA-Z0-9]*"
+    ConstraintDescription: 8-41 letters and digits only (no symbols, so it is safe inside a database URL).
+    Description: >
+      Master password for the RDS database. Type a new one when you create the stack; it is
+      never shown again by CloudFormation (NoEcho). Do not reuse a real password.
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues: [db.t3.micro, db.t4g.micro]
+    Description: RDS instance size (smallest classes only, to stay within the Sandbox).
+  DBEngineVersion:
+    Type: String
+    Default: "8.4"
+    Description: MySQL major version. RDS picks the current minor version.
+
+Resources:
+  # -------------------------------------------------------------------------
+  # Network: VPC, internet gateway, two public and two private subnets
+  # (same address plan as Lab 2: 10.0.0.0/24 and 10.0.2.0/24 public,
+  # 10.0.1.0/24 and 10.0.3.0/24 private)
+  # -------------------------------------------------------------------------
+  NimbusVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{Key: Name, Value: nimbus-vpc}]
+
+  NimbusInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{Key: Name, Value: nimbus-igw}]
+
+  NimbusGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref NimbusVpc
+      InternetGatewayId: !Ref NimbusInternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref NimbusVpc
+      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{Key: Name, Value: nimbus-public-a}]
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref NimbusVpc
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{Key: Name, Value: nimbus-public-b}]
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref NimbusVpc
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{Key: Name, Value: nimbus-private-a}]
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref NimbusVpc
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{Key: Name, Value: nimbus-private-b}]
+
+  # Public route table: internet traffic goes to the internet gateway.
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref NimbusVpc
+      Tags: [{Key: Name, Value: nimbus-rtb-public}]
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: NimbusGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref NimbusInternetGateway
+
+  PublicSubnetARouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  # Private route table: no route to the internet at all. The database (Stage 2)
+  # only needs to be reached from inside the VPC, so no NAT gateway is created.
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref NimbusVpc
+      Tags: [{Key: Name, Value: nimbus-rtb-private}]
+
+  PrivateSubnetARouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetBRouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTable
+
+  # -------------------------------------------------------------------------
+  # Security group for the application server
+  # -------------------------------------------------------------------------
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Nimbus web app - Streamlit on 8501; SSH closed unless AllowedSshCidr is set
+      VpcId: !Ref NimbusVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8501
+          ToPort: 8501
+          CidrIp: !Ref AllowedWebCidr
+          Description: Nimbus in the browser
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSshCidr
+          Description: SSH (closed by default)
+      Tags: [{Key: Name, Value: nimbus-app-sg}]
+
+  # -------------------------------------------------------------------------
+  # Database: Amazon RDS for MySQL in the private subnets (Lesson 8 design).
+  # Not publicly accessible; the only way in is port 3306 from the app
+  # server's security group.
+  # -------------------------------------------------------------------------
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Nimbus database - MySQL only from the Nimbus app server security group
+      VpcId: !Ref NimbusVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+          Description: MySQL from nimbus-app-sg only
+      Tags: [{Key: Name, Value: nimbus-db-sg}]
+
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Nimbus database - private subnets in two Availability Zones
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      Tags: [{Key: Name, Value: nimbus-db-subnets}]
+
+  NimbusDatabase:
+    Type: AWS::RDS::DBInstance
+    Metadata:
+      cfn-lint:
+        config:
+          # W1011 suggests Secrets Manager. We use a NoEcho parameter, the mechanism used in the
+          # course; see "Known limitations" in docs/aws-deployment.md.
+          ignore_checks: [W1011]
+    DeletionPolicy: Delete  # Sandbox: no final snapshot left behind when the stack is deleted
+    UpdateReplacePolicy: Delete
+    Properties:
+      DBInstanceIdentifier: !Sub ${AWS::StackName}-db
+      Engine: mysql
+      EngineVersion: !Ref DBEngineVersion
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: "20"
+      StorageType: gp2
+      DBName: nimbus
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups: [!Ref DbSecurityGroup]
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 0  # Sandbox: no automated backups (faster to create; see docs/aws-deployment.md)
+      DeletionProtection: false
+      Tags: [{Key: Name, Value: nimbus-db}]
+
+  # -------------------------------------------------------------------------
+  # Application server. User data installs Nimbus and starts it as a systemd
+  # service (restarts automatically and survives reboots). The stack only
+  # reports CREATE_COMPLETE after the app has reached RDS and answers its
+  # health check, via cfn-signal and the CreationPolicy below.
+  # -------------------------------------------------------------------------
+  AppServer:
+    Type: AWS::EC2::Instance
+    DependsOn: PublicDefaultRoute  # RDS is waited for automatically: user data uses its endpoint
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT20M
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnetA
+      SecurityGroupIds: [!Ref AppSecurityGroup]
+      Tags: [{Key: Name, Value: nimbus-app}]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          exec > >(tee -a /var/log/nimbus-setup.log) 2>&1
+
+          signal() {
+            /opt/aws/bin/cfn-signal -e "$1" --reason "$2" \
+              --stack ${AWS::StackName} --resource AppServer --region ${AWS::Region} || true
+          }
+          trap 'signal 1 "Nimbus setup failed: see the EC2 system log (lines after nimbus-setup)"' ERR
+
+          # 1. System packages (Python 3.9 ships with Amazon Linux 2023)
+          dnf install -y git python3-pip aws-cfn-bootstrap
+
+          # 2. Get the application from GitHub
+          APP_DIR=/home/ec2-user/nimbus
+          git clone --depth 1 --branch "${GitBranch}" "${GitHubRepoUrl}" "$APP_DIR"
+
+          # 3. Install dependencies in a virtual environment: exact versions from
+          #    requirements-lock.txt, so every deployment gets the same packages
+          python3 -m venv "$APP_DIR/.venv"
+          "$APP_DIR/.venv/bin/python" -m pip install --upgrade pip
+          REQS="$APP_DIR/requirements-lock.txt"
+          [ -f "$REQS" ] || REQS="$APP_DIR/requirements.txt"
+          "$APP_DIR/.venv/bin/python" -m pip install -r "$REQS"
+          COMMIT=$(git -C "$APP_DIR" rev-parse --short HEAD)
+          mkdir -p "$APP_DIR/analyses-data"
+          chown -R ec2-user:ec2-user "$APP_DIR"
+
+          # 4. Database settings. Tracing is switched off from here on so the
+          #    password is never written to the setup log or the system log.
+          #    The file is readable by root only; systemd passes it to the app.
+          set +x
+          umask 077
+          cat > /etc/nimbus.env <<EOF
+          NIMBUS_DATA_DIR=$APP_DIR/analyses-data
+          NIMBUS_COMMIT=$COMMIT
+          NIMBUS_DATABASE_URL=mysql+pymysql://${DBUsername}:${DBPassword}@${NimbusDatabase.Endpoint.Address}:${NimbusDatabase.Endpoint.Port}/nimbus?charset=utf8mb4
+          EOF
+          umask 022
+
+          # 5. Check the app server can reach RDS and create the tables
+          ( set -a; . /etc/nimbus.env; set +a
+            cd "$APP_DIR" && runuser -u ec2-user -- .venv/bin/python scripts/check_database.py ) \
+            || { signal 1 "Nimbus cannot reach RDS: check nimbus-db-sg and the database status"; exit 1; }
+
+          # 6. Run Nimbus as a service on port 8501
+          cat > /etc/systemd/system/nimbus.service <<EOF
+          [Unit]
+          Description=Nimbus Streamlit app
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          User=ec2-user
+          WorkingDirectory=$APP_DIR
+          EnvironmentFile=/etc/nimbus.env
+          ExecStart=$APP_DIR/.venv/bin/python -m streamlit run src/app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          systemctl daemon-reload
+          systemctl enable --now nimbus
+
+          # 7. Wait until the app answers, then tell CloudFormation it worked
+          for _ in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8501/_stcore/health; then
+              signal 0 "Nimbus (commit $COMMIT) is running on port 8501 and connected to RDS"
+              exit 0
+            fi
+            sleep 5
+          done
+          signal 1 "Nimbus did not answer its health check within 5 minutes: run 'journalctl -u nimbus'"
+
+Outputs:
+  NimbusUrl:
+    Description: Open this in a browser (http, not https)
+    Value: !Sub http://${AppServer.PublicDnsName}:8501
+  PublicIp:
+    Description: Public IP address of the app server
+    Value: !GetAtt AppServer.PublicIp
+  InstanceId:
+    Description: App server instance (EC2 > Instances)
+    Value: !Ref AppServer
+  VpcId:
+    Description: VPC for Nimbus
+    Value: !Ref NimbusVpc
+  PrivateSubnets:
+    Description: Private subnets that hold the database
+    Value: !Join [",", [!Ref PrivateSubnetA, !Ref PrivateSubnetB]]
+  DatabaseEndpoint:
+    Description: RDS endpoint (reachable only from inside the VPC, from nimbus-app-sg)
+    Value: !GetAtt NimbusDatabase.Endpoint.Address
+  DatabaseName:
+    Description: Database that holds the briefings, briefing_tickers and rm_notes tables
+    Value: nimbus

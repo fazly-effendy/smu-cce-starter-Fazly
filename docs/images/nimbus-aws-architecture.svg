@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1090" viewBox="0 0 1600 1090" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif">
+<defs><marker id="me2A4CA6" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="5" markerHeight="5" orient="auto" markerUnits="strokeWidth"><path d="M1,1 L10,6 L1,11" fill="none" stroke="#2A4CA6" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></marker><marker id="ms2E86B5" viewBox="0 0 12 12" refX="3" refY="6" markerWidth="5" markerHeight="5" orient="auto" markerUnits="strokeWidth"><path d="M11,1 L2,6 L11,11" fill="none" stroke="#2E86B5" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></marker><marker id="me2E86B5" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="5" markerHeight="5" orient="auto" markerUnits="strokeWidth"><path d="M1,1 L10,6 L1,11" fill="none" stroke="#2E86B5" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></marker><marker id="me3F4756" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="5" markerHeight="5" orient="auto" markerUnits="strokeWidth"><path d="M1,1 L10,6 L1,11" fill="none" stroke="#3F4756" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></marker><marker id="me6D5BD0" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="5" markerHeight="5" orient="auto" markerUnits="strokeWidth"><path d="M1,1 L10,6 L1,11" fill="none" stroke="#6D5BD0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></marker><marker id="me64748B" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="5" markerHeight="5" orient="auto" markerUnits="strokeWidth"><path d="M1,1 L10,6 L1,11" fill="none" stroke="#64748B" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="1600" height="1090" fill="#F2F6FC"/>
+<rect width="1600" height="104" fill="#16295E"/>
+<text x="56" y="50" font-size="31" font-weight="700" fill="#FFFFFF" text-anchor="start" opacity="1.0">Nimbus · AWS network architecture</text>
+<text x="56" y="80" font-size="16" font-weight="400" fill="#C7D4F2" text-anchor="start" opacity="1.0">Stage 2 deployment in the AWS Academy Sandbox (us-east-1), created by one CloudFormation template</text>
+<rect x="30" y="128" width="282" height="880" rx="22" fill="#FFFFFF" stroke="#C9D6EA" stroke-width="1.6"/>
+<rect x="52" y="148" width="86" height="28" rx="14.0" fill="#E2E8F0"/>
+<text x="66" y="166.68" font-size="13" font-weight="600" fill="#334155" text-anchor="start" opacity="1.0">INTERNET</text>
+<ellipse cx="171" cy="368" rx="82" ry="10" fill="#0F172A" opacity=".08"/>
+<rect x="111" y="240" width="120" height="86" rx="6" fill="#2A4CA6"/>
+<rect x="121" y="250" width="100" height="66" rx="3" fill="#BFD7FF"/>
+<rect x="121" y="250" width="100" height="9" fill="#EAF2FF"/>
+<rect x="131" y="268" width="70" height="5" rx="2" fill="#2A4CA6"/>
+<rect x="131" y="281" width="52" height="5" rx="2" fill="#2A4CA6"/>
+<rect x="131" y="294" width="62" height="5" rx="2" fill="#2A4CA6"/>
+<path d="M97,326 H 245 L 259,346 H 83 Z" fill="#7E9BE6"/>
+<rect x="83" y="346" width="176" height="6" rx="3" fill="#2A4CA6"/>
+<text x="171" y="392" font-size="17" font-weight="700" fill="#1E293B" text-anchor="middle" opacity="1.0">RM (Alex / Aiden)</text>
+<text x="171" y="414" font-size="13.5" font-weight="400" fill="#475569" text-anchor="middle" opacity="1.0">laptop browser</text>
+<ellipse cx="171" cy="638.8" rx="66.0" ry="15.312" fill="#0F172A" opacity=".08"/>
+<polygon points="111.0,560 171,594.8 171,628.8 111.0,594" fill="#5BB7DF"/><polygon points="171,594.8 231.0,560 231.0,594 171,628.8" fill="#3A8FC0"/><polygon points="111.0,560 171,525.2 231.0,560 171,594.8" fill="#C4E8F8"/>
+<path transform="translate(133,530) scale(0.76)" d="M22 62 H 78 A 18 18 0 0 0 74 27 A 26 26 0 0 0 26 30 A 16 16 0 0 0 22 62 Z" fill="#EAF7FD" stroke="#3A8FC0" stroke-width="5" stroke-linejoin="round"/>
+<text x="171" y="640" font-size="17" font-weight="700" fill="#1E293B" text-anchor="middle" opacity="1.0">Yahoo Finance</text>
+<text x="171" y="662" font-size="13.5" font-weight="400" fill="#475569" text-anchor="middle" opacity="1.0">market data via yfinance</text>
+<ellipse cx="171" cy="883.32" rx="59.400000000000006" ry="13.7808" fill="#0F172A" opacity=".08"/>
+<polygon points="117.0,790 171,821.32 171,873.32 117.0,842" fill="#3F4756"/><polygon points="171,821.32 225.0,790 225.0,842 171,873.32" fill="#262D39"/><polygon points="117.0,790 171,758.68 225.0,790 171,821.32" fill="#8B93A1"/>
+<g transform="matrix(0.54,0.3132,0,1,117.0,790)"><path d="M36 16.64 L 22 26.0 L 36 35.36 M64 16.64 L 78 26.0 L 64 35.36 M56 13.52 L 44 38.48" stroke="#F1F5F9" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="171" y="896" font-size="17" font-weight="700" fill="#1E293B" text-anchor="middle" opacity="1.0">GitHub</text>
+<text x="171" y="918" font-size="13.5" font-weight="400" fill="#475569" text-anchor="middle" opacity="1.0">Nimbus code, cloned at boot</text>
+<rect x="334" y="128" width="1236" height="880" rx="22" fill="#FFFFFF" stroke="#23324D" stroke-width="2"/>
+<rect x="356" y="148" width="180" height="28" rx="14.0" fill="#FFF1E0"/>
+<text x="370" y="166.68" font-size="13" font-weight="600" fill="#B45309" text-anchor="start" opacity="1.0">AWS CLOUD · us-east-1</text>
+<rect x="560" y="146" width="990" height="104" rx="16" fill="#FFF5F9" stroke="#F3B6CF" stroke-width="1.6"/>
+<ellipse cx="618" cy="241.46" rx="40.7" ry="9.4424" fill="#0F172A" opacity=".08"/>
+<polygon points="581.0,176 618,197.46 618,231.46 581.0,210" fill="#E0588F"/><polygon points="618,197.46 655.0,176 655.0,210 618,231.46" fill="#B63C71"/><polygon points="581.0,176 618,154.54 655.0,176 618,197.46" fill="#F9B9D3"/>
+<g transform="matrix(0.37,0.21459999999999999,0,1,581.0,176)"><rect x="24" y="8.84" width="52" height="3.06" rx="3" fill="#FFF0F6" opacity=".95"/><rect x="24" y="14.620000000000001" width="52" height="3.06" rx="3" fill="#FFF0F6" opacity=".95"/><rect x="24" y="20.400000000000002" width="52" height="3.06" rx="3" fill="#FFF0F6" opacity=".95"/></g>
+<text x="676" y="182" font-size="17" font-weight="700" fill="#1E293B" text-anchor="start" opacity="1.0">CloudFormation stack  nimbus</text>
+<text x="676" y="205" font-size="13.5" font-weight="400" fill="#475569" text-anchor="start" opacity="1.0">scripts/nimbus-stack.yaml creates every resource below. EC2 user data installs Nimbus,</text>
+<text x="676" y="225" font-size="13.5" font-weight="400" fill="#475569" text-anchor="start" opacity="1.0">checks RDS, starts the service, then cfn-signal → CREATE_COMPLETE only when the app is healthy.</text>
+<rect x="404" y="270" width="1146" height="720" rx="18" fill="#FBFCFF" stroke="#2F6FDC" stroke-width="2" stroke-dasharray="10 6"/>
+<text x="432" y="302" font-size="17" font-weight="700" fill="#1D4ED8" text-anchor="start" opacity="1.0">VPC  nimbus-vpc</text>
+<text x="590" y="302" font-size="15" font-weight="400" fill="#1D4ED8" text-anchor="start" opacity="0.8">10.0.0.0/16</text>
+<text x="752" y="302" font-size="14" font-weight="600" fill="#64748B" text-anchor="middle" opacity="1.0">Availability Zone A</text>
+<text x="1262" y="302" font-size="14" font-weight="600" fill="#64748B" text-anchor="middle" opacity="1.0">Availability Zone B</text>
+<rect x="478" y="318" width="548" height="318" rx="14" fill="#EEF9F2" stroke="#7CC79A" stroke-width="1.6"/>
+<rect x="1046" y="318" width="484" height="318" rx="14" fill="#F5FBF7" stroke="#B5DFC4" stroke-width="1.6"/>
+<rect x="478" y="664" width="548" height="308" rx="14" fill="#F0F2FE" stroke="#8EA2E6" stroke-width="1.6"/>
+<rect x="1046" y="664" width="484" height="308" rx="14" fill="#F7F8FE" stroke="#C3CDF2" stroke-width="1.6"/>
+<text x="498" y="348" font-size="15" font-weight="700" fill="#15803D" text-anchor="start" opacity="1.0">Public subnet A</text>
+<text x="632" y="348" font-size="14" font-weight="400" fill="#15803D" text-anchor="start" opacity="0.85">10.0.0.0/24</text>
+<text x="1066" y="348" font-size="15" font-weight="700" fill="#15803D" text-anchor="start" opacity="0.75">Public subnet B</text>
+<text x="1200" y="348" font-size="14" font-weight="400" fill="#15803D" text-anchor="start" opacity="0.65">10.0.2.0/24</text>
+<text x="498" y="694" font-size="15" font-weight="700" fill="#3743B5" text-anchor="start" opacity="1.0">Private subnet A</text>
+<text x="638" y="694" font-size="14" font-weight="400" fill="#3743B5" text-anchor="start" opacity="0.85">10.0.1.0/24</text>
+<text x="1066" y="694" font-size="15" font-weight="700" fill="#3743B5" text-anchor="start" opacity="0.75">Private subnet B</text>
+<text x="1206" y="694" font-size="14" font-weight="400" fill="#3743B5" text-anchor="start" opacity="0.65">10.0.3.0/24</text>
+<text x="1006" y="348" font-size="12.5" font-weight="400" fill="#15803D" text-anchor="end" opacity="1.0" font-style="italic">route 0.0.0.0/0 → internet gateway</text>
+<text x="1006" y="694" font-size="12.5" font-weight="400" fill="#3743B5" text-anchor="end" opacity="1.0" font-style="italic">route: local only · no internet, no NAT</text>
+<ellipse cx="620" cy="510.48" rx="61.60000000000001" ry="14.291199999999998" fill="#0F172A" opacity=".08"/>
+<polygon points="564.0,410 620,442.48 620,500.48 564.0,468" fill="#4169D1"/><polygon points="620,442.48 676.0,410 676.0,468 620,500.48" fill="#2A4CA6"/><polygon points="564.0,410 620,377.52 676.0,410 620,442.48" fill="#9DB8F7"/>
+<g transform="matrix(0.56,0.3248,0,1,564.0,410)"><rect x="22" y="16.240000000000002" width="56" height="24.36" rx="4" fill="#DCE7FF" opacity=".95"/><rect x="31" y="23.200000000000003" width="30" height="5" rx="2" fill="#4169D1"/><rect x="31" y="30.16" width="22" height="5" rx="2" fill="#4169D1"/></g>
+<text x="620" y="520" font-size="16" font-weight="700" fill="#1E293B" text-anchor="middle" opacity="1.0">nimbus-app · EC2 t2.micro</text>
+<text x="620" y="541" font-size="13" font-weight="400" fill="#475569" text-anchor="middle" opacity="1.0">Streamlit UI + Python logic on :8501</text>
+<text x="620" y="559" font-size="13" font-weight="400" fill="#475569" text-anchor="middle" opacity="1.0">systemd service · Amazon Linux 2023</text>
+<ellipse cx="880" cy="494.36" rx="46.2" ry="10.718399999999999" fill="#0F172A" opacity=".08"/>
+<polygon points="838.0,420 880,444.36 880,484.36 838.0,460" fill="#1FA598"/><polygon points="880,444.36 922.0,420 922.0,460 880,484.36" fill="#14796F"/><polygon points="838.0,420 880,395.64 922.0,420 880,444.36" fill="#86E3D6"/>
+<g transform="matrix(0.42,0.24359999999999998,0,1,838.0,420)"><rect x="24" y="12.0" width="52" height="16.0" rx="5" fill="#D8FBF6" opacity=".95"/><rect x="32" y="16.8" width="36" height="5" rx="2" fill="#14796F"/><rect x="32" y="21.6" width="24" height="5" rx="2" fill="#14796F"/></g>
+<text x="880" y="506" font-size="15" font-weight="700" fill="#1E293B" text-anchor="middle" opacity="1.0">EBS root volume</text>
+<text x="880" y="526" font-size="13" font-weight="400" fill="#475569" text-anchor="middle" opacity="1.0">briefing files .md + .json</text>
+<path d="M690,440 L 828,440" stroke="#14796F" stroke-width="2.5" stroke-dasharray="3 5" stroke-linecap="round"/>
+<text x="760" y="432" font-size="12" font-weight="600" fill="#14796F" text-anchor="middle" opacity="1.0">attached</text>
+<rect x="652" y="586" width="352" height="30" rx="8" fill="#E4ECFF" stroke="#1F4FB8" stroke-opacity=".35"/>
+<g transform="translate(664,592)"><rect x="0" y="6" width="12" height="10" rx="2" fill="#1F4FB8"/><path d="M2.5 6 V4 a3.5 3.5 0 0 1 7 0 V6" stroke="#1F4FB8" stroke-width="2" fill="none"/></g>
+<text x="684" y="606" font-size="12.6" fill="#1F4FB8"><tspan font-weight="700">nimbus-app-sg</tspan><tspan dx="6">in: 8501 from anyone · SSH closed</tspan></text>
+<polygon points="1130.0,420 1180,449.0 1180,501.0 1130.0,472" fill="#F8FAFC" stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="6 5"/>
+<polygon points="1180,449.0 1230.0,420 1230.0,472 1180,501.0" fill="#F8FAFC" stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="6 5"/>
+<polygon points="1130.0,420 1180,391.0 1230.0,420 1180,449.0" fill="#F8FAFC" stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="6 5"/>
+<text x="1290" y="410" font-size="15" font-weight="700" fill="#64748B" text-anchor="start" opacity="1.0">Stage 3 · scaling</text>
+<text x="1290" y="431" font-size="13" font-weight="400" fill="#64748B" text-anchor="start" opacity="1.0">second app server</text>
+<text x="1290" y="449" font-size="13" font-weight="400" fill="#64748B" text-anchor="start" opacity="1.0">(design after Week 9)</text>
+<ellipse cx="620" cy="834" rx="58" ry="12" fill="#0F172A" opacity=".08"/>
+<path d="M568,794 v 20 a 52 20 0 0 0 104 0 v -20 z" fill="#A897EE"/>
+<path d="M620,814 m 0 0 a 52 20 0 0 0 52 -20 v 20 a 52 20 0 0 1 -52 20 z" fill="#7F6FD2"/>
+<ellipse cx="620" cy="794" rx="52" ry="20" fill="#DDD5FF" stroke="#A897EE" stroke-width="1.2"/>
+<path d="M568,766 v 20 a 52 20 0 0 0 104 0 v -20 z" fill="#A897EE"/>
+<path d="M620,786 m 0 0 a 52 20 0 0 0 52 -20 v 20 a 52 20 0 0 1 -52 20 z" fill="#7F6FD2"/>
+<ellipse cx="620" cy="766" rx="52" ry="20" fill="#DDD5FF" stroke="#A897EE" stroke-width="1.2"/>
+<path d="M568,738 v 20 a 52 20 0 0 0 104 0 v -20 z" fill="#A897EE"/>
+<path d="M620,758 m 0 0 a 52 20 0 0 0 52 -20 v 20 a 52 20 0 0 1 -52 20 z" fill="#7F6FD2"/>
+<ellipse cx="620" cy="738" rx="52" ry="20" fill="#DDD5FF" stroke="#A897EE" stroke-width="1.2"/>
+<text x="620" y="870" font-size="16" font-weight="700" fill="#1E293B" text-anchor="middle" opacity="1.0">nimbus-db · RDS for MySQL</text>
+<text x="620" y="890" font-size="13" font-weight="400" fill="#475569" text-anchor="middle" opacity="1.0">db.t3.micro · not publicly accessible</text>
+<rect x="780" y="708" width="226" height="166" rx="12" fill="#FFFFFF" stroke="#C3CDF2" stroke-width="1.6"/>
+<text x="798" y="734" font-size="14" font-weight="700" fill="#3743B5" text-anchor="start" opacity="1.0">Database  nimbus</text>
+<rect x="798" y="752" width="8" height="8" rx="2" fill="#7F6FD2"/>
+<text x="814" y="760" font-size="13" font-weight="600" fill="#1E293B" text-anchor="start" opacity="1.0">briefings</text>
+<text x="814" y="775" font-size="11.5" font-weight="400" fill="#64748B" text-anchor="start" opacity="1.0">metadata + filename</text>
+<rect x="798" y="790" width="8" height="8" rx="2" fill="#7F6FD2"/>
+<text x="814" y="798" font-size="13" font-weight="600" fill="#1E293B" text-anchor="start" opacity="1.0">briefing_tickers</text>
+<text x="814" y="813" font-size="11.5" font-weight="400" fill="#64748B" text-anchor="start" opacity="1.0">one row per ticker</text>
+<rect x="798" y="828" width="8" height="8" rx="2" fill="#7F6FD2"/>
+<text x="814" y="836" font-size="13" font-weight="600" fill="#1E293B" text-anchor="start" opacity="1.0">rm_notes</text>
+<text x="814" y="851" font-size="11.5" font-weight="400" fill="#64748B" text-anchor="start" opacity="1.0">RM meeting note</text>
+<rect x="652" y="920" width="340" height="30" rx="8" fill="#E9E7FF" stroke="#4338CA" stroke-opacity=".35"/>
+<g transform="translate(664,926)"><rect x="0" y="6" width="12" height="10" rx="2" fill="#4338CA"/><path d="M2.5 6 V4 a3.5 3.5 0 0 1 7 0 V6" stroke="#4338CA" stroke-width="2" fill="none"/></g>
+<text x="684" y="940" font-size="12.6" fill="#4338CA"><tspan font-weight="700">nimbus-db-sg</tspan><tspan dx="6">in: 3306 from nimbus-app-sg only</tspan></text>
+<polygon points="1135.0,760 1180,786.1 1180,826.1 1135.0,800" fill="#F8FAFC" stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="6 5"/>
+<polygon points="1180,786.1 1225.0,760 1225.0,800 1180,826.1" fill="#F8FAFC" stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="6 5"/>
+<polygon points="1135.0,760 1180,733.9 1225.0,760 1180,786.1" fill="#F8FAFC" stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="6 5"/>
+<text x="1262" y="752" font-size="14" font-weight="700" fill="#64748B" text-anchor="start" opacity="1.0">DB subnet group, 2nd AZ</text>
+<text x="1262" y="772" font-size="13" font-weight="400" fill="#64748B" text-anchor="start" opacity="1.0">required by RDS; single-AZ</text>
+<text x="1262" y="790" font-size="13" font-weight="400" fill="#64748B" text-anchor="start" opacity="1.0">database, so no standby here</text>
+<ellipse cx="404" cy="511.72" rx="37.400000000000006" ry="8.6768" fill="#0F172A" opacity=".08"/>
+<polygon points="370.0,444 404,463.72 404,501.72 370.0,482" fill="#2E9E61"/><polygon points="404,463.72 438.0,444 438.0,482 404,501.72" fill="#1F7748"/><polygon points="370.0,444 404,424.28 438.0,444 404,463.72" fill="#A7E3BF"/>
+<g transform="matrix(0.34,0.1972,0,1,370.0,444)"><path d="M26 15.959999999999999 H 70 M58 11.4 L 72 15.959999999999999 L 58 20.520000000000003" stroke="#ECFDF3" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M74 25.080000000000002 H 30 M42 20.520000000000003 L 28 25.080000000000002 L 42 29.64" stroke="#ECFDF3" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></g>
+<rect x="362" y="504" width="84" height="40" rx="8" fill="#FFFFFF" stroke="#A7E3BF"/>
+<text x="404" y="521" font-size="13" font-weight="700" fill="#1F7748" text-anchor="middle" opacity="1.0">Internet</text>
+<text x="404" y="537" font-size="13" font-weight="700" fill="#1F7748" text-anchor="middle" opacity="1.0">gateway</text>
+<path d="M262,300 L330,300 L330,430 L362,430" fill="none" stroke="#2A4CA6" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#me2A4CA6)"/>
+<text x="282" y="290" font-size="13" font-weight="600" fill="#2A4CA6" text-anchor="middle" opacity="1.0">HTTP :8501</text>
+<path d="M370,448 L250,560" fill="none" stroke="#2E86B5" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#me2E86B5)" marker-start="url(#ms2E86B5)"/>
+<text x="240" y="500" font-size="13" font-weight="600" fill="#2E86B5" text-anchor="middle" opacity="1.0">HTTPS</text>
+<path d="M232,790 L318,790 L318,478 L366,470" fill="none" stroke="#3F4756" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="7 6" marker-end="url(#me3F4756)"/>
+<text x="270" y="780" font-size="13" font-weight="600" fill="#3F4756" text-anchor="middle" opacity="1.0">git clone</text>
+<path d="M440,440 L556,440" fill="none" stroke="#2A4CA6" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#me2A4CA6)"/>
+<path d="M620,572 L620,640 L620,676" fill="none" stroke="#6D5BD0" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#me6D5BD0)"/>
+<text x="632" y="655" font-size="13" font-weight="700" fill="#6D5BD0" text-anchor="start" opacity="1.0">MySQL 3306</text>
+<path d="M56,1040 L96,1040" fill="none" stroke="#2A4CA6" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#me2A4CA6)"/>
+<text x="106" y="1045" font-size="13.5" font-weight="400" fill="#334155" text-anchor="start" opacity="1.0">network traffic</text>
+<path d="M246,1040 L286,1040" fill="none" stroke="#64748B" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="7 6" marker-end="url(#me64748B)"/>
+<text x="296" y="1045" font-size="13.5" font-weight="400" fill="#334155" text-anchor="start" opacity="1.0">setup only, or planned</text>
+<g transform="translate(486,1031)"><rect x="0" y="6" width="12" height="10" rx="2" fill="#1F4FB8"/><path d="M2.5 6 V4 a3.5 3.5 0 0 1 7 0 V6" stroke="#1F4FB8" stroke-width="2" fill="none"/></g>
+<text x="506" y="1045" font-size="13.5" font-weight="400" fill="#334155" text-anchor="start" opacity="1.0">security group rule (inbound)</text>
+<rect x="726" y="1031" width="18" height="18" rx="4" fill="#F8FAFC" stroke="#94A3B8" stroke-dasharray="4 3"/>
+<text x="752" y="1045" font-size="13.5" font-weight="400" fill="#334155" text-anchor="start" opacity="1.0">not used yet</text>
+<text x="1560" y="1045" font-size="13.5" font-weight="400" fill="#475569" text-anchor="end" opacity="1.0">Status: Stages 1–2 (VPC, EC2, RDS) deployed and verified 25 Oct 2026 · Stage 3 (scaling) after Week 9</text>
+<text x="56" y="1074" font-size="12.5" font-weight="400" fill="#64748B" text-anchor="start" opacity="1.0">No NAT gateway: the database needs no internet access. Passwords are CloudFormation NoEcho parameters, never stored in the repository.</text>
+</svg>

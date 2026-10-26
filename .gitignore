@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local configuration and secrets (commit .env.example, never .env)
+.env
+.env.*
+!.env.example
+
+# Saved briefings and the local SQLite database (Lesson 7: analyses-data/ must not be committed)
+analyses-data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Editors and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
