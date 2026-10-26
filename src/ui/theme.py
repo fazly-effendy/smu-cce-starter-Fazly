@@ -36,7 +36,9 @@ CSS = f"""
 [data-testid="stMainBlockContainer"], .block-container {{
   max-width: {CONTENT_MAX_WIDTH}px !important;
   width: 100%;
-  padding: 1.5rem 2rem 3rem 2rem;
+  /* Top padding clears Streamlit's fixed toolbar (the bar with the ⋮ menu, 60px tall);
+     less than that hides the Nimbus title behind it. */
+  padding: 4.5rem 2rem 3rem 2rem;
 }}
 
 /* Header */
