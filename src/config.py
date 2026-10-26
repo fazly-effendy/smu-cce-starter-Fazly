@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 APP_NAME = "Nimbus"
-APP_VERSION = "0.9.0"
+APP_VERSION = "0.9.1"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA_DIR = PROJECT_ROOT / "analyses-data"
@@ -85,6 +85,11 @@ def to_local(moment: datetime) -> datetime:
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     return moment.astimezone(display_timezone())
+
+
+def local_today():
+    """Today's date in the display time zone (the server itself runs on UTC)."""
+    return datetime.now(timezone.utc).astimezone(display_timezone()).date()
 
 
 def deployed_commit() -> Optional[str]:

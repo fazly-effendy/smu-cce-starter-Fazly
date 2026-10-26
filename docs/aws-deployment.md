@@ -8,7 +8,7 @@ The deployment is built in stages. Each stage is the same template, extended:
 | Stage | Adds | Status |
 |---|---|---|
 | 1 | VPC (2 public + 2 private subnets), security group, EC2 app server installed by user data, systemd service, health-checked `CREATE_COMPLETE` | ✅ Deployed in the Sandbox |
-| 2 | Amazon RDS for MySQL in the private subnets; database security group that accepts MySQL only from the app server; app connected to RDS | ✅ Deployed and verified (25 Oct 2026); reboot test pending |
+| 2 | Amazon RDS for MySQL in the private subnets; database security group that accepts MySQL only from the app server; app connected to RDS | ✅ Deployed and verified (25 and 27 Oct 2026), including the reboot test. Evidence: [`docs/evidence/2026-10-27-stage2`](evidence/2026-10-27-stage2/README.md) |
 | 3 | Scaling, per the Week 9 lesson | After Week 9 |
 
 ## Architecture (Stage 2)
@@ -78,7 +78,12 @@ An independent audit of the deployed stack (no changes made) confirmed:
   generate, compare, note, save, search by ticker, reopen and the invalid-ticker
   case all passed. Row counts rose by exactly one briefing per save.
 
-Still to run: the reboot test (evidence item 6). The Sandbox also shows a
+A second deployment on 27 Oct 2026 (from `main`, commit c6b9b46) passed the same checks
+**and the reboot test**: the History counts and the saved briefing were unchanged after
+EC2 → Reboot. Screenshots and results:
+[`docs/evidence/2026-10-27-stage2`](evidence/2026-10-27-stage2/README.md).
+
+The Sandbox also shows a
 *Bastion Host* and a *Lab Instance*; they belong to the AWS Academy lab
 environment, not to this stack.
 
@@ -106,11 +111,13 @@ environment, not to this stack.
 Crop out the account ID in every screenshot. Never screenshot the Parameters
 tab with a visible password (it shows `****`, which is fine).
 
-1. **Stack → Events:** `NimbusDatabase` `CREATE_COMPLETE`, and `AppServer`
-   with status reason *Nimbus (commit …) is running on port 8501 and connected
-   to RDS*. The commit is also shown at the bottom of the app's sidebar, so you
-   can prove exactly which code is deployed.
-   Then the stack at `CREATE_COMPLETE`.
+1. **Stack → Events:** `NimbusDatabase` `CREATE_COMPLETE`, then `AppServer`
+   *"Received SUCCESS signal with UniqueId i-…"* (CloudFormation's own wording for a
+   success; it does not display the reason text), then the stack at `CREATE_COMPLETE`.
+   **Which code is deployed:** the bottom of the app's sidebar shows
+   *Nimbus 0.9.1 · commit … · server started …*. The same commit is in the EC2 system log
+   (**EC2 → nimbus-app → Actions → Monitor and troubleshoot → Get system log**, line
+   `nimbus-setup: deployed commit …`). It should match the top commit of the deployed branch on GitHub.
 2. **Stack → Outputs:** `NimbusUrl` and `DatabaseEndpoint`.
 3. **RDS → Databases → nimbus-db → Connectivity & security:**
    - *Publicly accessible: No*;
@@ -127,8 +134,9 @@ tab with a visible password (it shows `****`, which is fine).
    - Search by ticker `MSFT`, then by the client reference; open the briefing.
      The snapshot banner and the note are shown.
 6. **Persistence:** go to **EC2 → nimbus-app → Instance state → Reboot**. After
-   about a minute, reload: the History caption shows the same counts and the
-   briefing still opens.
+   about two minutes, reload the same URL. The sidebar's *server started* time is now
+   after the reboot (proof that the server really restarted), the History caption shows
+   the same counts, and the briefing still opens.
 7. **VPC → Route tables → nimbus-rtb-private → Routes:** only the `local` route.
 
 Optional, for a viva question on SQL: to run SQL directly against RDS, set

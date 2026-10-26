@@ -88,7 +88,49 @@ class _LogCapture(logging.Handler):
         self.messages.append(record.getMessage())
 
 
-def fetch_news(ticker: str, count: int = 10) -> dict:
+# Words that do not identify a company on their own (dropped from name matching).
+_NAME_NOISE = {"inc", "incorporated", "corporation", "corp", "company", "co", "ltd", "limited", "plc",
+               "holdings", "group", "the", "sa", "nv", "ag", "se", "adr", "class", "a", "b", "c", "com"}
+_GENERIC_FIRST_WORDS = {"bank", "first", "general", "united", "american", "international", "global",
+                        "national", "new", "advanced", "taiwan", "china", "singapore"}
+
+
+def company_terms(ticker: str, name: Optional[str]) -> Tuple[List[str], List[str]]:
+    """How a headline can refer to a company: (ticker symbols, lower-case name phrases).
+
+    Uses the company name from Yahoo ("NVIDIA Corporation" -> "nvidia") plus Nimbus's own
+    aliases ("google" for GOOGL). Used to drop search results that merely list the ticker.
+    """
+    from services.company_lookup import COMPANY_TICKERS  # local import: no import cycle
+
+    symbol = ticker.upper()
+    symbols = [symbol, symbol.split(".")[0]]
+    words = [w for w in re.split(r"[^a-z0-9&]+", (name or "").lower()) if w and w not in _NAME_NOISE]
+    phrases = set()
+    if words:
+        phrases.add(" ".join(words))
+        if len(words[0]) >= 4 and words[0] not in _GENERIC_FIRST_WORDS:
+            phrases.add(words[0])
+    phrases.update(alias for alias, mapped in COMPANY_TICKERS.items() if mapped == symbol)
+    return sorted(set(symbols)), sorted(phrases)
+
+
+def mentions_company(text: str, ticker: str, name: Optional[str]) -> bool:
+    """True if the text names the company or shows its ticker as a whole word."""
+    symbols, phrases = company_terms(ticker, name)
+    if any(re.search(rf"(?<![A-Za-z0-9]){re.escape(s)}(?![A-Za-z0-9])", text or "") for s in symbols):
+        return True
+    lowered = (text or "").lower()
+    return any(re.search(rf"\b{re.escape(p)}\b", lowered) for p in phrases)
+
+
+def _article_text(article: dict) -> str:
+    content = article.get("content") if isinstance(article.get("content"), dict) else {}
+    return " ".join(str(x) for x in (article.get("title"), article.get("summary"),
+                                     content.get("title"), content.get("summary")) if x)
+
+
+def fetch_news(ticker: str, count: int = 10, name: Optional[str] = None) -> dict:
     """Recent news for a ticker, with an honest account of what happened.
 
     yfinance's news feed returns an empty list (rather than an error) when Yahoo's
@@ -115,13 +157,21 @@ def fetch_news(ticker: str, count: int = 10) -> dict:
         except Exception as exc:
             found = []
             problems.append(f"news search failed ({exc.__class__.__name__}: {exc})")
-        # Search results include general market stories; keep only those Yahoo links to this ticker.
+        # Search results include general market stories, and Yahoo links many of them to tickers
+        # they barely mention. Keep an article only if Yahoo links it to this ticker AND its
+        # headline or summary names the company (or shows the ticker).
         related = [a for a in found if isinstance(a, dict)
                    and ticker.upper() in [str(t).upper() for t in a.get("relatedTickers") or []]]
-        if related:
-            return {"items": related, "source": "Yahoo Finance search", "status": "ok",
+        about = [a for a in related if mentions_company(_article_text(a), ticker, name)]
+        if about:
+            return {"items": about, "source": "Yahoo Finance search", "status": "ok",
                     "message": "Yahoo's news feed returned nothing, so these articles come from Yahoo search "
-                               f"(only those Yahoo links to {ticker.upper()})."}
+                               f"(only those that name {ticker.upper()} and that Yahoo links to it)."}
+        if related:
+            return {"items": [], "source": None, "status": "empty",
+                    "message": f"Yahoo's news feed returned nothing. Yahoo search linked {len(related)} "
+                               f"articles to {ticker.upper()}, but none name the company in the headline "
+                               "or summary, so they are not shown."}
         if found:
             return {"items": [], "source": None, "status": "empty",
                     "message": f"Yahoo's news feed returned nothing, and Yahoo search returned {len(found)} "
@@ -158,7 +208,8 @@ def fetch_company_data(ticker: str) -> dict:
         "balance_sheet": lambda: stock.balance_sheet,
         "cash_flow": lambda: stock.cashflow,
         "recommendations": lambda: stock.recommendations,
-        "news": lambda: fetch_news(ticker),
+        # "info" is fetched first, so the company name is available to filter news by.
+        "news": lambda: fetch_news(ticker, name=extract_profile(raw.get("info"), ticker)["name"]),
         "calendar": lambda: stock.calendar,
         "earnings_dates": lambda: stock.get_earnings_dates(limit=8),
     }

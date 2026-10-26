@@ -49,13 +49,21 @@ def format_multiple(value: Optional[float]) -> str:
 
 
 def format_date(value: Optional[str]) -> str:
-    """ISO date or date-time -> "4 Oct 2026"; unparseable input is shown as given."""
+    """ISO date or date-time -> "4 Oct 2026"; unparseable input is shown as given.
+
+    A date-time with a time zone (e.g. an article's UTC publish time) is first converted
+    to the display time zone, so it shows the same day as the live "9m ago" label did.
+    """
+    from config import to_local
+
     if not value:
         return NOT_AVAILABLE
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return value
+    if parsed.tzinfo is not None:
+        parsed = to_local(parsed)
     return f"{parsed.day} {parsed.strftime('%b %Y')}"
 
 

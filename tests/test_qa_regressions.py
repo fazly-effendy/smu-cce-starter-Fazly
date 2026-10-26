@@ -6,7 +6,7 @@ test_tabs_keep_their_place_between_runs in test_app_workflow.py.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from streamlit.testing.v1 import AppTest
 
@@ -126,3 +126,71 @@ def test_selector_shows_the_briefing_opened_from_the_sidebar():
     chooser = next(s for s in app.selectbox if s.label == "Choose a saved briefing")
     assert chooser.value == older.briefing_id
     assert app.session_state["open_briefing_id"] == older.briefing_id
+
+
+# --- Second AWS QA run (27 Oct 2026, AUDIT-RUN-20261026-01) -------------------------------------
+
+def test_search_fallback_drops_linked_articles_that_do_not_name_the_company(monkeypatch):
+    """QA round 2: Yahoo linked 'Why PagSeguro Stock Crashed Today' to NVDA."""
+    fake_yahoo.NEWS_FEED_MODE = "empty"
+    monkeypatch.setitem(fake_yahoo.SEARCH_NEWS, "nvda", [
+        {"uuid": "p1", "title": "Why PagSeguro Stock Crashed Today", "publisher": "Motley Fool",
+         "link": "https://example.com/pags", "providerPublishTime": 1792000000, "relatedTickers": ["PAGS", "NVDA"]},
+        {"uuid": "n1", "title": "Nvidia could exploit loophole in China", "publisher": "Barron's",
+         "link": "https://example.com/nvda", "providerPublishTime": 1792000000, "relatedTickers": ["NVDA"]},
+        {"uuid": "n2", "title": "Is NVDA still a buy?", "publisher": "Reuters",
+         "link": "https://example.com/nvda2", "providerPublishTime": 1792000000, "relatedTickers": ["NVDA"]},
+    ])
+    result = yahoo.fetch_news("NVDA", name="NVIDIA Corporation")
+    assert [item["uuid"] for item in result["items"]] == ["n1", "n2"]
+
+
+def test_company_aliases_count_as_naming_the_company():
+    assert yahoo.mentions_company("Google cloud wins a bank deal", "GOOGL", "Alphabet Inc.")
+    assert yahoo.mentions_company("Bill Gates on Meta's new model", "META", "Meta Platforms, Inc.")
+    assert not yahoo.mentions_company("Bill Gates on Meta's new model", "MSFT", "Microsoft Corporation")
+
+
+def test_saved_article_dates_use_the_local_day(monkeypatch):
+    """QA round 2: an article published at 16:07 UTC on 26 Oct (00:07 SGT, 27 Oct) was saved as 26 Oct."""
+    from analytics.formatting import format_date
+
+    monkeypatch.setenv("NIMBUS_TIMEZONE", "Asia/Singapore")
+    assert format_date("2026-10-26T16:07:00Z") == "27 Oct 2026"
+    assert format_date("2026-10-26") == "26 Oct 2026"  # plain dates are never shifted
+
+
+def test_meeting_date_defaults_to_the_local_day(monkeypatch):
+    """QA round 2: at 00:17 SGT on 27 Oct the meeting date defaulted to 26 Oct (the server's UTC day)."""
+    import config
+
+    monkeypatch.setenv("NIMBUS_TIMEZONE", "Asia/Singapore")
+    monkeypatch.setattr(config, "datetime", _FrozenDatetime)
+    assert config.local_today() == date(2026, 10, 27)
+
+
+class _FrozenDatetime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        moment = datetime(2026, 10, 26, 16, 17, tzinfo=timezone.utc)  # 00:17 SGT on 27 Oct
+        return moment.astimezone(tz) if tz else moment
+
+
+def test_invalid_date_range_shows_only_the_error():
+    """QA round 2: the old results table stayed visible under the date error."""
+    briefing_store.save_briefing(make_briefing(), make_note("Acme"))
+    app = AppTest.from_file(APP, default_timeout=60)
+    app.run()
+    date_inputs = [d for d in app.date_input if d.label.startswith("Saved")]
+    date_inputs[0].set_value(date(2026, 10, 28))
+    date_inputs[1].set_value(date(2026, 10, 27))
+    button(app, "Search").click().run()
+    assert any("after “Saved to”" in e.value for e in app.error)
+    assert not [s for s in app.selectbox if s.label == "Choose a saved briefing"]
+
+
+def test_sidebar_shows_version_and_server_start_time():
+    app = AppTest.from_file(APP, default_timeout=60)
+    app.run()
+    captions = [c.value for c in app.sidebar.caption]
+    assert any(c.startswith("Nimbus 0.9.1") and "server started" in c for c in captions), captions

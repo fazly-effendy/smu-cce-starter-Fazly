@@ -39,6 +39,7 @@ from config import (
     database_url,
     deployed_commit,
     describe_database_url,
+    local_today,
     timezone_label,
     to_local,
 )
@@ -471,6 +472,13 @@ def render_article_list(articles) -> str:
 # Sections of the page
 # --------------------------------------------------------------------------
 
+@st.cache_resource
+def server_started_at() -> str:
+    """When this server process started (once per process). After an EC2 reboot this changes,
+    which shows in the sidebar that the app really restarted."""
+    return utc_now_iso()
+
+
 def sidebar() -> None:
     with st.sidebar:
         theme.side_title("Quick add")
@@ -502,7 +510,8 @@ def sidebar() -> None:
                 "- Figures are historical, not forecasts or advice"
             )
         commit = deployed_commit()
-        st.caption(f"Nimbus {APP_VERSION}" + (f" · commit {commit}" if commit else ""))
+        st.caption(f"Nimbus {APP_VERSION}" + (f" · commit {commit}" if commit else "")
+                   + f" · server started {format_timestamp(server_started_at())}")
 
 
 def company_picker() -> None:
@@ -691,7 +700,7 @@ def note_fields(briefing: Briefing, prefix: str = "", prefill: Optional[Dict[str
     left, right = st.columns(2)
     left.text_input("Client or briefing reference *", placeholder="e.g. Acme Holdings – Q4 review", key=k("ref"),
                     value=prefill.get("ref") or "")
-    right.date_input("Meeting date", value=prefill.get("meeting") or date.today(), key=k("meeting"))
+    right.date_input("Meeting date", value=prefill.get("meeting") or local_today(), key=k("meeting"))
     st.text_area("Discussion summary *", placeholder="What was discussed with the client?", key=k("summary"),
                  value=prefill.get("summary") or "")
     left, right = st.columns(2)
@@ -800,16 +809,20 @@ def history_section() -> None:
     )
 
     with st.form("history_search_form"):
-        c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 2, 1])
+        # Two rows, so the date boxes are wide enough to show the whole date.
+        c1, c2, c3 = st.columns([1, 2, 1])
         ticker = c1.text_input("Ticker", placeholder="e.g. MU")
-        date_from = c2.date_input(f"Saved from ({timezone_label()})", value=None)
-        date_to = c3.date_input(f"Saved to ({timezone_label()})", value=None)
-        client_reference = c4.text_input("Client / briefing reference contains")
-        analysis_type = c5.selectbox("Analysis type", ["All", ANALYSIS_TYPE])
+        client_reference = c2.text_input("Client / briefing reference contains")
+        analysis_type = c3.selectbox("Analysis type", ["All", ANALYSIS_TYPE])
+        d1, d2, _ = st.columns([1, 1, 2])
+        date_from = d1.date_input(f"Saved from ({timezone_label()})", value=None)
+        date_to = d2.date_input(f"Saved to ({timezone_label()})", value=None)
         submitted = st.form_submit_button("Search")
     if submitted:
         if date_from and date_to and date_from > date_to:
+            # Show only the error: listing the previous results under it would look like an answer.
             st.error("“Saved from” is after “Saved to”. Swap the dates and search again.")
+            return
         else:
             st.session_state["history_filters"] = {
                 "ticker": ticker,

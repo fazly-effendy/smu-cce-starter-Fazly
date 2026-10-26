@@ -8,7 +8,7 @@ search for it and reopen it exactly as it was.
 
 Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 
-> **Status (v0.9.0).** Features 1–5 work end to end in GitHub Codespaces
+> **Status (v0.9.1).** Features 1–5 work end to end in GitHub Codespaces
 > (SQLite and local files) and on AWS: CloudFormation creates the VPC, EC2 app
 > server and Amazon RDS for MySQL, and an independent audit on 25 Oct 2026
 > confirmed generate → compare → note → save → search → reopen against RDS.
@@ -180,6 +180,7 @@ then reads its JSON snapshot. Reopening never contacts Yahoo.
 ├── notebooks/                    # original notebooks (unchanged)
 ├── scripts/                      # nimbus-stack.yaml (deployment), check_database.py, debug_news.py, make_architecture_diagram.py, lesson templates
 ├── docs/aws-deployment.md        # step-by-step AWS deployment and evidence checklist
+├── docs/evidence/                # dated deployment evidence (screenshots + results)
 ├── lessons/                      # course lesson notes
 ├── requirements.txt              # app dependencies
 ├── requirements-lock.txt         # exact versions installed on EC2 (Python 3.9)
@@ -311,7 +312,7 @@ each test):
 NIMBUS_TEST_DATABASE_URL='mysql+pymysql://<user>:<password>@127.0.0.1:3306/nimbus_test' python -m pytest
 ```
 
-All 98 tests pass on MariaDB 10.11 (MySQL-compatible) through PyMySQL.
+All 104 tests pass on MariaDB 10.11 (MySQL-compatible) through PyMySQL.
 `python scripts/check_database.py` checks that the configured database is
 reachable and its tables exist, printing only the host and row counts, never
 the password.
@@ -367,7 +368,7 @@ In short:
 | Stage | What it adds | Status |
 |---|---|---|
 | 1 | VPC with public and private subnets, security group, EC2 installed by user data and run as a systemd service | ✅ Deployed in the Sandbox (`CREATE_COMPLETE`, app reachable) |
-| 2 | Amazon RDS for MySQL in the private subnets, reachable only from the app server | ✅ Deployed and verified in the Sandbox (25 Oct 2026); reboot test pending |
+| 2 | Amazon RDS for MySQL in the private subnets, reachable only from the app server | ✅ Deployed and verified in the Sandbox (25 and 27 Oct 2026), including a reboot. [Evidence](docs/evidence/2026-10-27-stage2/README.md) |
 | 3 | Scaling (Week 9 lesson) | Not started |
 
 `scripts/lesson5.yaml` and `scripts/lesson5-nimbus.yaml` are the course's
@@ -383,6 +384,11 @@ search all matched the expected results. The defects found, and what was done:
 |---|---|---|---|
 | Typed note text lost; Notes tab jumps back to Compare | High | On Streamlit 1.50 (EC2), the tabs reset when the number of page elements above them changes between runs (the spinner after generating), dropping text not yet committed | ✅ Fixed: everything above the tabs sits in containers that exist on every run. Checked in a browser on 1.50 and 1.66 |
 | Unrelated news (Netflix, Nike) shown for NVDA | Medium | When the news feed is empty, the Yahoo search fallback fell back again to all search results | ✅ Fixed: only articles Yahoo links to the ticker; otherwise "no linked articles" is stated |
+| Still unrelated news in run 2 (PagSeguro under NVDA; Meta, Anthropic under MSFT) | Medium | Yahoo links general articles to many tickers | ✅ Fixed in 0.9.1: kept only if the headline or summary also names the company (name or alias, e.g. "Google" for GOOGL) or its ticker |
+| Meeting date and saved news dates one day behind after midnight SGT | Low | The server's own date is UTC | ✅ Fixed in 0.9.1: local date |
+| Old results shown under the date-range error | Low | Search still ran with the previous filters | ✅ Fixed in 0.9.1 |
+| Date boxes too narrow | Low | Five fields in one row | ✅ Fixed in 0.9.1: two rows |
+| Commit not visible in stack events | Medium | CloudFormation shows its own text for a success signal | ✅ Commit shown in the app sidebar and the EC2 system log; sidebar also shows when the server started |
 | "Retrieved" time later than the real retrieval | Medium | Data is reused for 15 minutes, but the time shown was when the briefing was built | ✅ Fixed: each company records when Yahoo was called |
 | Date search in UTC: 25 Oct (Singapore) found nothing | Medium | Search used the UTC date | ✅ Fixed: local date (`NIMBUS_TIMEZONE`, default Singapore); all times shown in SGT |
 | "From" after "to" accepted silently | Low | No check | ✅ Fixed: error message |
@@ -395,6 +401,8 @@ search all matched the expected results. The defects found, and what was done:
 | No segment data (e.g. cloud) | Low | Not provided by Yahoo | Documented in limitations |
 
 The four QA briefings saved before the date fix keep their UTC search date.
+QA run 2 (27 Oct 2026) passed every other check, including the reboot test:
+[evidence](docs/evidence/2026-10-27-stage2/README.md).
 
 ## Known limitations
 

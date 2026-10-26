@@ -298,6 +298,9 @@ Resources:
           [ -f "$REQS" ] || REQS="$APP_DIR/requirements.txt"
           "$APP_DIR/.venv/bin/python" -m pip install -r "$REQS"
           COMMIT=$(git -C "$APP_DIR" rev-parse --short HEAD)
+          # Written to the EC2 system log (Actions > Monitor and troubleshoot > Get system log),
+          # so the deployed commit can be proven from the AWS side as well as in the app.
+          echo "nimbus-setup: deployed commit $COMMIT from branch ${GitBranch}"
           mkdir -p "$APP_DIR/analyses-data"
           chown -R ec2-user:ec2-user "$APP_DIR"
 
