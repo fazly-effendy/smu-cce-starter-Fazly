@@ -4,7 +4,9 @@ Yahoo Finance is replaced by tests/fake_yahoo.py, so this proves the workflow,
 storage and search, but not live data access. Run the manual checklist in the
 README for that.
 
-Steps follow the prototype acceptance test agreed for Nimbus.
+test_instructor_acceptance_test follows the instructor's acceptance test
+(27 Oct 2026) step by step. Step 12 (the same on Amazon RDS) is run on AWS; the
+same suite also runs against MySQL with NIMBUS_TEST_DATABASE_URL.
 """
 
 from __future__ import annotations
@@ -38,6 +40,16 @@ def text_input(app: AppTest, label_start: str):
     return next(w for w in app.text_input if w.label.startswith(label_start))
 
 
+def set_client(app: AppTest, client_id: str = "C-1001", name: str = "") -> AppTest:
+    """Step 1: enter a new client ID (and optionally a name) at the top of the page."""
+    app.text_input(key="new_client_id").set_value(client_id)
+    if name:
+        app.text_input(key="new_client_name").set_value(name)
+    app.run()
+    assert not app.exception, app.exception
+    return app
+
+
 def add_companies(app: AppTest, text: str) -> AppTest:
     """Type into the company search box and press Enter."""
     text_input(app, "Find companies").set_value(text).run()
@@ -47,7 +59,20 @@ def add_companies(app: AppTest, text: str) -> AppTest:
 
 def generate(app: AppTest, tickers: str) -> AppTest:
     add_companies(app, tickers)
-    button(app, "Generate briefing").click().run()
+    button(app, "Generate comparison").click().run()
+    assert not app.exception, app.exception
+    return app
+
+
+def fill_note(app: AppTest, interests: str = "Dividend income and AI exposure", notes: str = "") -> None:
+    key = app.session_state["briefing"].briefing_id
+    app.text_area(key=f"interests_{key}").set_value(interests)
+    if notes:
+        app.text_area(key=f"notes_{key}").set_value(notes)
+
+
+def save_in_tab(app: AppTest) -> AppTest:
+    app.button(key="notes_save").click().run()
     assert not app.exception, app.exception
     return app
 
@@ -56,91 +81,95 @@ def comparison_values(app: AppTest):
     return app.table[0].value  # first table on the page is the financial comparison
 
 
-def search_and_open(app: AppTest, ticker: str) -> AppTest:
-    text_input(app, "Ticker").set_value(ticker)
+def search_and_open(app: AppTest, client: str = None, company: str = "") -> AppTest:
+    """History tab: filter by client and/or company, then open the first result."""
+    if client:
+        app.selectbox(key="history_client").set_value(client)
+    app.text_input(key="history_company").set_value(company)
     button(app, "Search").click().run()
-    button(app, "Open briefing").click().run()
+    button(app, "Open discussion").click().run()
     assert not app.exception, app.exception
     return app
 
 
-def test_acceptance_workflow(isolated_environment):
-    # Steps 2-3: start the app
-    app = start_app()
-    assert any('class="nb-title">Nimbus<' in m.value for m in app.markdown)
+def saved_values_table(app: AppTest) -> pd.DataFrame:
+    """The 'Values at the time of the discussion' table (read from discussion_companies)."""
+    return next(t.value for t in app.table if "Stock price at discussion" in t.value.index)
 
-    # Steps 4-5: two tickers, generate the briefing
+
+def test_instructor_acceptance_test(isolated_environment):
+    # 1. Select or enter a Client ID
+    app = set_client(start_app(), "c-1001", "Acme Holdings")
+
+    # 2-3. Enter at least two tickers and generate the comparison
     generate(app, " aapl, MSFT ,aapl ")
     briefing = app.session_state["briefing"]
     assert briefing.successful_tickers == ["AAPL", "MSFT"]  # trimmed, upper-cased, de-duplicated
 
-    # Step 6: normalized price comparison (data behind the chart) and returns
+    # 4. Stock-price performance side by side: rebased chart data, returns and prices per company
     assert set(briefing.price_index) == {"AAPL", "MSFT"}
     assert all(next(iter(series.values())) == 100.0 for series in briefing.price_index.values())
     assert [m.delta for m in app.metric] == ["14.5% over 1 year", "-7.0% over 1 year"]
-    cards = [m.value for m in app.markdown if 'class="nb-stats"' in m.value]
-    assert "33.5x" in cards[0] and "$3.50T" in cards[0] and "N/A" in cards[1]
-    assert set(briefing.price_history) == {"AAPL", "MSFT"}  # actual prices for chart tooltips
+    assert any("Share-price performance, side by side" in m.value for m in app.markdown)
 
-    # Step 7: normalized financial comparison, formatted, N/A for missing inputs
+    # 5. Revenue growth, profit margin and debt-to-equity, plus trends over time
     table = comparison_values(app)
     assert table.loc["Revenue growth (YoY)", "AAPL"] == "6.4%"
+    assert table.loc["Revenue growth (YoY)", "MSFT"] == "15.1%"
     assert table.loc["Net profit margin", "MSFT"] == "35.8%"
-    assert table.loc["Market cap", "AAPL"] == "$3.50T"
-    assert table.loc["Debt-to-assets", "MSFT"] == "N/A"
-    assert table.loc["P/E (trailing)", "MSFT"] == "N/A"
-    assert table.loc["Price date", "AAPL"] == "12 Oct 2026"  # date on its own row, not wrapped next to the price
+    assert table.loc["Debt-to-equity", "AAPL"] == "1.43x"
+    assert table.loc["Debt-to-equity", "MSFT"] == "N/A"  # not reported: never shown as zero
+    assert any("Trends over time" in m.value for m in app.markdown)
+    trend = next(t.value for t in app.table if list(t.value.index) == ["AAPL", "MSFT"])
+    assert len(trend.columns) >= 2  # several fiscal years
 
-    # Formatted statements (Feature 1): no raw 12-digit numbers
-    statements = app.table[1].value
-    assert statements.loc["Revenue"].iloc[0] == "$416.00B"
-
-    # Step 8: sourced news with clickable links, publisher and date
-    news_markdown = " ".join(m.value for m in app.markdown)
-    assert "(https://finance.yahoo.com/news/apple-1.html)" in news_markdown
-    assert 'nb-chip accent">AAPL</span> · Reuters · ' in news_markdown and " ago" in news_markdown
-    assert "\\$AAPL" in news_markdown  # dollar sign escaped, not rendered as maths
-
-    # Step 9: RM note
-    key = briefing.briefing_id
-    app.text_input(key=f"ref_{key}").set_value("Acme Holdings Q4 review")
-    app.text_area(key=f"summary_{key}").set_value("Discussed FY results and capex plans")
-    app.text_area(key=f"actions_{key}").set_value("Send comparison deck by Friday")
+    # 6. Notes about the client's interests
+    fill_note(app, "Dividend income and AI exposure", "Discussed FY results and capex plans")
     calls_before_save = fake_yahoo.data_calls()
 
-    # Step 10: save exactly once
-    button(app, "💾 Save briefing and RM notes").click().run()
-    assert not app.exception, app.exception
-    assert any("saved as" in s.value for s in app.success)
-    assert "💾 Save briefing and RM notes" not in [b.label for b in app.button]  # cannot save again
-    app.run()  # an extra rerun must not create a duplicate
-    assert fake_yahoo.data_calls() == calls_before_save  # saving does not refetch data
+    # 7. Save the discussion snapshot (exactly once, without refetching data)
+    save_in_tab(app)
+    assert any("discussion snapshot was saved" in s.value for s in app.success)
+    assert not any(b.key == "notes_save" for b in app.button)  # cannot save again
+    app.run()
+    assert fake_yahoo.data_calls() == calls_before_save
+    assert database.count_rows() == {"clients": 1, "discussions": 1, "discussion_companies": 2}
+    row = database.search_discussions()[0]
+    assert (row["client_id"], row["client_name"]) == ("C-1001", "Acme Holdings")
+    assert row["client_interests"] == "Dividend income and AI exposure"
+    assert (isolated_environment / row["filename"]).exists()  # Markdown copy on disk / EBS
 
-    # Step 11: records exist in SQLite
-    assert database.count_rows() == {"briefings": 1, "briefing_tickers": 2, "rm_notes": 1}
-    row = database.search_briefings()[0]
-    assert row["client_reference"] == "Acme Holdings Q4 review"
-    assert (isolated_environment / row["filename"]).exists()
-
-    # Steps 12-14: search by ticker, reopen, values match the snapshot, no new Yahoo calls
+    # 8. Search by Client ID and reopen it (no Yahoo calls)
     calls_before_reopen = fake_yahoo.data_calls()
-    search_and_open(app, "msft")
+    search_and_open(app, client="C-1001")
     assert fake_yahoo.data_calls() == calls_before_reopen
     assert any("Historical snapshot" in i.value for i in app.info)
     page_text = " ".join(m.value for m in app.markdown)
-    assert "Discussed FY results and capex plans" in page_text
-    assert "Send comparison deck by Friday" in page_text
-    historical_table = [t.value for t in app.table if "Revenue growth (YoY)" in t.value.index][-1]
-    assert historical_table.equals(table)  # comparison table inside the reopened briefing
+    assert "C-1001" in page_text and "Dividend income and AI exposure" in page_text
 
-    # Steps 15-16: restart (new session, same database and files), search and reopen again
+    # 10. Reopened values match the saved snapshot: the database rows and the comparison
+    saved = saved_values_table(app)
+    for company in briefing.companies:
+        assert saved.loc["Stock price at discussion", company.ticker] == f"${company.last_close:,.2f}"
+    assert saved.loc["Revenue growth (YoY)", "AAPL"] == "6.4%"
+    assert saved.loc["Debt-to-equity", "AAPL"] == "1.43x"
+    historical_table = [t.value for t in app.table if "Revenue growth (YoY)" in t.value.index
+                        and "P/E (trailing)" in t.value.index][-1]
+    assert historical_table.equals(table)
+
+    # 9. Search by ticker (any case) and reopen it
+    search_and_open(app, company="msft")
+    assert any("Historical snapshot" in i.value for i in app.info)
+
+    # 11. Restart Streamlit (new session, same database) and retrieve again, both ways
     restarted = start_app()
     assert restarted.session_state["briefing"] is None
-    calls_before_restart_reopen = fake_yahoo.data_calls()
-    search_and_open(restarted, "AAPL")
-    assert fake_yahoo.data_calls() == calls_before_restart_reopen
-    assert any("Historical snapshot" in i.value for i in restarted.info)
-    assert "Acme Holdings Q4 review" in " ".join(m.value for m in restarted.markdown)
+    calls_before_restart = fake_yahoo.data_calls()
+    search_and_open(restarted, client="C-1001")
+    assert "Dividend income and AI exposure" in " ".join(m.value for m in restarted.markdown)
+    search_and_open(restarted, company="Apple")  # by company name as well as ticker
+    assert saved_values_table(restarted).equals(saved)
+    assert fake_yahoo.data_calls() == calls_before_restart
 
 
 def test_invalid_ticker_is_reported_and_valid_ones_continue():
@@ -165,18 +194,34 @@ def test_fewer_than_two_tickers_is_refused():
     assert app.session_state["briefing"] is None
 
 
-def test_note_requires_reference_and_summary():
+def test_save_requires_a_client_and_the_clients_interests():
     app = generate(start_app(), "AAPL, MSFT")
-    button(app, "💾 Save briefing and RM notes").click().run()
-    assert any("client or briefing reference" in e.value for e in app.error)
-    assert database.count_rows()["briefings"] == 0
+    save_in_tab(app)
+    error = " ".join(e.value for e in app.error)
+    assert "a client" in error and "client's interests" in error
+    set_client(app, "C 1001")  # invalid: contains a space
+    fill_note(app)
+    save_in_tab(app)
+    assert any("a client" in e.value for e in app.error)
+    assert database.count_rows()["discussions"] == 0
+
+
+def test_saved_client_can_be_chosen_next_time():
+    app = set_client(start_app(), "C-2002", "Borcelle")
+    generate(app, "AAPL, MSFT")
+    fill_note(app)
+    save_in_tab(app)
+    assert app.session_state["client_choice"] == "C-2002"  # the new client is now selected
+    restarted = start_app()
+    options = restarted.selectbox(key="client_choice").options
+    assert any(o.startswith("C-2002 · Borcelle") for o in options)
 
 
 def test_typing_a_note_does_not_refetch_data():
     app = generate(start_app(), "AAPL, MSFT")
     calls = fake_yahoo.data_calls()
     key = app.session_state["briefing"].briefing_id
-    app.text_area(key=f"summary_{key}").set_value("typing...")
+    app.text_area(key=f"interests_{key}").set_value("typing...")
     app.run()
     app.run()
     assert fake_yahoo.data_calls() == calls
@@ -186,7 +231,7 @@ def test_typing_a_note_does_not_refetch_data():
 def test_regenerating_within_cache_window_reuses_data(tickers):
     app = generate(start_app(), tickers)
     calls = fake_yahoo.data_calls()
-    button(app, "Generate briefing").click().run()
+    button(app, "Generate comparison").click().run()
     assert fake_yahoo.data_calls() == calls  # served from the 15-minute cache
 
 
@@ -262,12 +307,11 @@ def test_single_company_shows_add_another_prompt():
     assert any("Add another ticker to compare" in m.value for m in app.markdown)
 
 
-def test_recent_briefings_in_sidebar_open_the_saved_briefing():
-    app = generate(start_app(), "AAPL, MSFT")
+def test_recent_discussions_in_sidebar_open_the_saved_discussion():
+    app = generate(set_client(start_app()), "AAPL, MSFT")
     key = app.session_state["briefing"].briefing_id
-    app.text_input(key=f"ref_{key}").set_value("Sidebar check")
-    app.text_area(key=f"summary_{key}").set_value("Summary")
-    button(app, "💾 Save briefing and RM notes").click().run()
+    fill_note(app)
+    save_in_tab(app)
     recent = [b for b in app.sidebar.button if b.key and b.key.startswith("recent_")]
     assert len(recent) == 1
     recent[0].click().run()
@@ -292,7 +336,7 @@ def test_analyst_view_shows_consensus_target_and_upside():
     assert (frame.loc["AAPL", "Low"], frame.loc["AAPL", "High"]) == (180.0, 300.0)
     assert frame.loc["MSFT"].drop("Ccy").isna().all()  # missing data stays blank, never zero
     charts = app.get("vega_lite_chart") + app.get("arrow_vega_lite_chart")  # element name differs by version
-    assert len(charts) == 2  # price chart + ratings bar
+    assert len(charts) == 5  # price chart + 3 trend charts + ratings bar
 
 
 def test_earnings_table_shows_next_date_and_beat_or_miss():
@@ -353,57 +397,50 @@ def test_saved_articles_are_stored_with_the_note_and_reopened(isolated_environme
     assert any(b.label == "★ Saved to note" for b in app.button)
     assert "Microsoft cloud revenue rises" in markdown_containing(app, "Microsoft cloud revenue rises")
 
-    key = app.session_state["briefing"].briefing_id
-    app.text_input(key=f"ref_{key}").set_value("Article check")
-    app.text_area(key=f"summary_{key}").set_value("Summary")
-    button(app, "💾 Save briefing and RM notes").click().run()
+    set_client(app)
+    fill_note(app)
+    save_in_tab(app)
     assert not any("Save to note" in b.label for b in app.button)  # read-only once saved
 
-    row = database.search_briefings()[0]
+    row = database.search_discussions()[0]
     text = (isolated_environment / row["filename"]).read_text()
     assert "**Saved articles**" in text and "[Microsoft cloud revenue rises](https://example.com/msft-cloud)" in text
 
-    restarted = search_and_open(start_app(), "MSFT")
+    restarted = search_and_open(start_app(), company="MSFT")
     assert "Saved articles" in " ".join(m.value for m in restarted.markdown)
 
 
-def fill_note(app: AppTest, reference: str = "Header save check", summary: str = "Summary") -> None:
-    key = app.session_state["briefing"].briefing_id
-    app.text_input(key=f"ref_{key}").set_value(reference)
-    app.text_area(key=f"summary_{key}").set_value(summary)
-
-
 def test_header_shows_unsaved_until_saved_then_save_button_saves_and_toasts():
-    app = generate(start_app(), "AAPL, MSFT")
-    assert any("Unsaved briefing" in m.value for m in app.markdown)
+    app = generate(set_client(start_app()), "AAPL, MSFT")
+    assert any("Unsaved discussion" in m.value for m in app.markdown)
     fill_note(app)
     next(b for b in app.button if b.key == "header_save").click().run()
-    assert database.count_rows()["briefings"] == 1
+    assert database.count_rows()["discussions"] == 1
     assert any("✓ Saved" in m.value for m in app.markdown)
     assert not any(b.key == "header_save" for b in app.button)
-    assert [t.value for t in app.toast][0].startswith("Briefing saved as ")
+    assert [t.value for t in app.toast][0] == "Discussion with C-1001 saved"
     recent = [b.label for b in app.sidebar.button if b.key and b.key.startswith("recent_")]
-    assert len(recent) == 1 and recent[0].startswith("AAPL, MSFT")  # in Recent briefings straight away
+    assert len(recent) == 1 and recent[0].startswith("C-1001 · AAPL, MSFT")  # in the sidebar straight away
 
 
-def test_header_save_with_empty_note_opens_the_note_dialog():
-    app = generate(start_app(), "AAPL, MSFT")
+def test_header_save_with_empty_note_opens_the_dialog():
+    app = generate(set_client(start_app()), "AAPL, MSFT")
     next(b for b in app.button if b.key == "header_save").click().run()
-    assert database.count_rows()["briefings"] == 0
+    assert database.count_rows()["discussions"] == 0
     key = app.session_state["briefing"].briefing_id
-    app.text_input(key=f"dlg_ref_{key}").set_value("From the dialog")
-    app.text_area(key=f"dlg_summary_{key}").set_value("Saved via the header button")
-    next(b for b in app.button if b.label == "💾 Save briefing and RM notes" and b.key != "notes_save").click().run()
-    assert database.count_rows()["briefings"] == 1
-    assert database.search_briefings()[0]["client_reference"] == "From the dialog"
+    app.text_area(key=f"dlg_interests_{key}").set_value("From the dialog")
+    next(b for b in app.button if b.label == "💾 Save discussion" and b.key not in ("notes_save", "header_save")).click().run()
+    assert database.count_rows()["discussions"] == 1
+    assert database.search_discussions()[0]["client_interests"] == "From the dialog"
 
 
-def test_dialog_carries_over_what_was_typed_in_the_notes_tab():
-    app = generate(start_app(), "AAPL, MSFT")
+def test_dialog_carries_over_what_was_typed_in_the_discussion_tab():
+    app = generate(start_app(), "AAPL, MSFT")  # no client yet, so the note is incomplete
     key = app.session_state["briefing"].briefing_id
-    app.text_input(key=f"ref_{key}").set_value("Typed in Notes")  # summary still empty
+    app.text_area(key=f"interests_{key}").set_value("Typed in the tab")
     next(b for b in app.button if b.key == "header_save").click().run()
-    assert app.text_input(key=f"dlg_ref_{key}").value == "Typed in Notes"
+    assert app.text_area(key=f"dlg_interests_{key}").value == "Typed in the tab"
+    assert any("none chosen yet" in m.value for m in app.markdown)
 
 
 def test_news_tab_explains_a_failed_fetch_instead_of_no_news():
@@ -439,16 +476,17 @@ def test_tabs_keep_their_place_between_runs(isolated_environment):
     before = page_layout(app)
 
     add_companies(app, "AAPL")
-    button(app, "Generate briefing").click().run()  # error: needs two companies
+    button(app, "Generate comparison").click().run()  # error: needs two companies
     assert page_layout(app) == before
 
     generate(app, "MSFT")
     after_generate = page_layout(app)
     assert after_generate == before
 
-    text_input(app, "Client or briefing reference").set_value("Acme Q4").run()  # first note edit
+    fill_note(app, "Acme Q4")  # first note edit
+    app.run()
     assert page_layout(app) == after_generate
 
-    button(app, "💾 Save briefing").click().run()  # note incomplete: opens the save dialog
+    next(b for b in app.button if b.key == "header_save").click().run()  # no client yet: opens the dialog
     assert not app.exception, app.exception
     assert page_layout(app) == after_generate

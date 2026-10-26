@@ -1,9 +1,9 @@
-"""Briefing snapshot files (Features 3 and 4: storage).
+"""Client-discussion files (Features 3 and 4: storage).
 
-Follows the Lesson 7 design: each saved briefing becomes a Markdown file in
-analyses-data/ (the local disk in Codespaces, the EBS root volume on EC2).
-A JSON file with the same name is written next to it so the briefing can be
-reopened in the app exactly as saved, including the price chart.
+Follows the Lesson 7 design: each saved discussion becomes a readable Markdown
+file in analyses-data/ (the local disk in Codespaces, the EBS root volume on
+EC2). The complete snapshot used to reopen it in the app is stored as JSON in
+the database (see storage/database.py), so any app server can reopen it.
 
 Reused from the earlier src/analysis_storage.py: safe filename segments,
 exclusive file creation (never overwrite), and the path check on reading.
@@ -15,7 +15,6 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Tuple
 
 from analytics.formatting import (
     NOT_AVAILABLE,
@@ -27,7 +26,7 @@ from analytics.formatting import (
     format_price,
     format_timestamp,
 )
-from analytics.ratios import RATIO_LABELS
+from analytics.ratios import RATIO_LABELS, format_ratio
 from config import data_dir
 from models.briefing import Briefing
 from services.yahoo import STATEMENT_ITEMS
@@ -41,11 +40,12 @@ def _filename_segment(value: str) -> str:
 
 
 def snapshot_stem(briefing: Briefing) -> str:
-    """e.g. AAPL-MSFT__company-briefing__20261024T130501Z__1a2b3c4d"""
+    """e.g. C-1001__AAPL-MSFT__20261027T130501Z__1a2b3c4d (client, companies, saved time, ID)."""
     tickers = _filename_segment("-".join(briefing.successful_tickers or briefing.tickers))[:60]
-    created = datetime.fromisoformat(briefing.created_at.replace("Z", "+00:00"))
+    client = _filename_segment(briefing.note.client_id)[:32] if briefing.note and briefing.note.client_id else "no-client"
+    created = datetime.fromisoformat((briefing.saved_at or briefing.created_at).replace("Z", "+00:00"))
     timestamp = created.strftime("%Y%m%dT%H%M%SZ")
-    return f"{tickers}__{_filename_segment(briefing.analysis_type)}__{timestamp}__{briefing.briefing_id[:8]}"
+    return f"{client}__{tickers}__{timestamp}__{briefing.briefing_id[:8]}"
 
 
 def _write_new(path: Path, content: str) -> None:
@@ -53,19 +53,11 @@ def _write_new(path: Path, content: str) -> None:
         handle.write(content)
 
 
-def write_snapshot(briefing: Briefing) -> Tuple[str, str]:
-    """Write the Markdown and JSON files. Returns (markdown filename, json filename)."""
-    folder = data_dir()
-    stem = snapshot_stem(briefing)
-    markdown_path = folder / f"{stem}.md"
-    json_path = folder / f"{stem}.json"
-    _write_new(json_path, json.dumps(briefing.to_dict(), indent=2, ensure_ascii=False))
-    try:
-        _write_new(markdown_path, briefing_markdown(briefing))
-    except Exception:
-        json_path.unlink(missing_ok=True)
-        raise
-    return markdown_path.name, json_path.name
+def write_markdown(briefing: Briefing) -> str:
+    """Write the discussion's Markdown file (never overwrites). Returns its filename."""
+    path = data_dir() / f"{snapshot_stem(briefing)}.md"
+    _write_new(path, briefing_markdown(briefing))
+    return path.name
 
 
 def delete_snapshot(*filenames: str) -> None:
@@ -86,19 +78,22 @@ def _resolve(filename: str) -> Path:
     return path
 
 
-def read_snapshot(json_filename: str) -> Briefing:
-    """Load a saved briefing from its JSON file. Never calls Yahoo."""
-    path = _resolve(json_filename)
-    if not path.exists():
-        raise FileNotFoundError(
-            f"The saved file {json_filename} was not found in {path.parent}. "
-            "It may have been created on a different machine or deleted."
-        )
-    return Briefing.from_dict(json.loads(path.read_text(encoding="utf-8")))
+def briefing_from_json(text: str) -> Briefing:
+    """Rebuild a saved discussion from its JSON snapshot (as stored in the database)."""
+    return Briefing.from_dict(json.loads(text))
 
 
 def read_markdown(markdown_filename: str) -> str:
     return _resolve(markdown_filename).read_text(encoding="utf-8")
+
+
+def markdown_for(briefing: Briefing, markdown_filename: str) -> str:
+    """The saved Markdown file if this server has it, otherwise the same content rebuilt from
+    the snapshot (e.g. when the discussion was saved through another app server)."""
+    try:
+        return read_markdown(markdown_filename)
+    except (OSError, ValueError):
+        return briefing_markdown(briefing)
 
 
 # --------------------------------------------------------------------------
@@ -118,12 +113,22 @@ def _table(headers, rows) -> str:
 def briefing_markdown(briefing: Briefing) -> str:
     companies = briefing.companies
     tickers = [c.ticker for c in companies]
+    note = briefing.note
     out = [
-        f"# Nimbus company briefing: {', '.join(tickers) or 'no companies'}",
+        f"# Nimbus client discussion: {note.client_id if note else 'no client'} · {', '.join(tickers) or 'no companies'}",
         "",
-        "## Briefing details",
-        f"- **Briefing ID:** {briefing.briefing_id}",
-        f"- **Analysis type:** {briefing.analysis_type}",
+        "## Discussion",
+        f"- **Client ID:** {note.client_id if note else NOT_AVAILABLE}"
+        + (f" ({note.client_name})" if note and note.client_name else ""),
+        f"- **Discussion date:** {format_date(note.discussion_date) if note else NOT_AVAILABLE}",
+        f"- **Companies:** {', '.join(tickers) or NOT_AVAILABLE}",
+        "",
+        "**Client's interests**",
+        "",
+        (note.client_interests if note and note.client_interests else NOT_AVAILABLE),
+        "",
+        "## Snapshot details",
+        f"- **Discussion ID:** {briefing.briefing_id}",
         f"- **Generated:** {format_timestamp(briefing.created_at)}",
         f"- **Saved:** {format_timestamp(briefing.saved_at)}",
         f"- **Analysis period (share prices):** {briefing.analysis_period}"
@@ -136,12 +141,12 @@ def briefing_markdown(briefing: Briefing) -> str:
 
     out += ["", "## Company comparison", ""]
     rows = [
-        ["Last close"] + [f"{format_price(c.last_close, c.currency)} ({c.last_close_date})" for c in companies],
+        ["Stock price at discussion (close)"] + [f"{format_price(c.last_close, c.currency)} ({c.last_close_date})" for c in companies],
         ["Holding-period return"] + [format_percent(briefing.holding_period_returns.get(c.ticker)) for c in companies],
         ["Market capitalisation"] + [format_money(c.market_cap, c.currency) for c in companies],
         ["P/E ratio (trailing)"] + [format_multiple(c.pe_ratio) for c in companies],
     ]
-    rows += [[label] + [format_percent(c.ratios.get(key)) for c in companies] for key, label in RATIO_LABELS.items()]
+    rows += [[label] + [format_ratio(key, c.ratios.get(key)) for c in companies] for key, label in RATIO_LABELS.items()]
     rows.append(["Fiscal year used"] + [c.fiscal_year_end or NOT_AVAILABLE for c in companies])
     out.append(_table(["Measure"] + tickers, rows))
 
@@ -203,17 +208,13 @@ def briefing_markdown(briefing: Briefing) -> str:
         for warning in company.warnings:
             out.append(f"\n> Note: {warning}")
 
-    out += ["", "## RM notes", ""]
-    note = briefing.note
+    out += ["", "## Discussion notes", ""]
     if note:
         out += [
-            f"- **Client / briefing reference:** {note.client_reference}",
-            f"- **Meeting date:** {format_date(note.meeting_date)}",
             f"- **Next review date:** {format_date(note.next_review_date)}",
             f"- **Note recorded:** {format_timestamp(note.created_at)}",
             "",
-            "**Discussion summary**", "", note.discussion_summary or NOT_AVAILABLE, "",
-            "**Client priorities or concerns**", "", note.client_priorities or NOT_AVAILABLE, "",
+            "**Discussion summary**", "", note.notes or NOT_AVAILABLE, "",
             "**Follow-up actions**", "", note.follow_up_actions or NOT_AVAILABLE, "",
             "**Other notes**", "", note.free_text or NOT_AVAILABLE,
         ]
@@ -226,5 +227,5 @@ def briefing_markdown(briefing: Briefing) -> str:
                                                format_date(article.get("published_at")) if article.get("published_at") else None] if x)
                 out.append(f"- {title}" + (f" ({meta})" if meta else ""))
     else:
-        out.append("No RM note recorded.")
+        out.append("No discussion note recorded.")
     return "\n".join(out).rstrip() + "\n"

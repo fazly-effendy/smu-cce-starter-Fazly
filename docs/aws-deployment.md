@@ -46,7 +46,7 @@ flowchart LR
 | App security group | `nimbus-app-sg` | Port 8501 from `AllowedWebCidr` (default anyone); SSH closed unless `AllowedSshCidr` is set |
 | Database security group | `nimbus-db-sg` | Port 3306 **only from `nimbus-app-sg`**; nothing else can connect |
 | DB subnet group | `nimbus-db-subnets` | Places RDS in the two private subnets (RDS requires two AZs) |
-| RDS for MySQL (db.t3.micro, 20 GB) | `nimbus-db` | Metadata database `nimbus`: tables `briefings`, `briefing_tickers`, `rm_notes`. **Not publicly accessible** |
+| RDS for MySQL (db.t3.micro, 20 GB) | `nimbus-db` | Database `nimbus`: tables `clients`, `discussions`, `discussion_companies` (created by the app on first start). **Not publicly accessible** |
 | EC2 instance (t2.micro, Amazon Linux 2023) | `nimbus-app` | Clones the repo, installs the exact versions in `requirements-lock.txt` in a venv, connects to RDS, runs Nimbus as the `nimbus` systemd service |
 
 **How "complete" is decided:** CloudFormation creates RDS first, because the
@@ -125,18 +125,22 @@ tab with a visible password (it shows `****`, which is fine).
    - VPC security group `nimbus-db-sg`.
 4. **EC2 → Security groups → nimbus-db-sg → Inbound rules:** one rule, MySQL/Aurora 3306, source
    = the `sg-…` ID of `nimbus-app-sg` (not an IP range).
-5. **Browser at `NimbusUrl`** (http, not https):
-   - Generate `AAPL, MSFT`; show the comparison, chart and news.
-   - Add a note with a client reference, and save.
+5. **Browser at `NimbusUrl`** (http, not https): the instructor's acceptance
+   test, step 12 (steps 1–11 on Amazon RDS):
+   - **New client**, Client ID `C-1001`; add `AAPL, MSFT`; **Generate comparison**.
+   - Show the share-price chart, the comparison table (revenue growth, net
+     margin, debt-to-equity) and the trend charts.
+   - **Discussion** tab: write the client's interests, then **Save discussion**.
    - **History tab:** the caption reads *Database: mysql+pymysql at
-     nimbus-db.….rds.amazonaws.com:3306 · 1 briefing, 2 ticker records,
-     1 RM note*. This is the proof that metadata is in RDS, not SQLite.
-   - Search by ticker `MSFT`, then by the client reference; open the briefing.
-     The snapshot banner and the note are shown.
+     nimbus-db.….rds.amazonaws.com:3306 · 1 client, 1 discussion, 2 company
+     records*. This is the proof that the records are in RDS, not SQLite.
+   - Filter by client `C-1001` and open the discussion: snapshot banner, the
+     note, and **Values at the time of the discussion** (read from RDS). Then
+     search company `msft` and open it again.
 6. **Persistence:** go to **EC2 → nimbus-app → Instance state → Reboot**. After
    about two minutes, reload the same URL. The sidebar's *server started* time is now
    after the reboot (proof that the server really restarted), the History caption shows
-   the same counts, and the briefing still opens.
+   the same counts, and the discussion still opens with the same values.
 7. **VPC → Route tables → nimbus-rtb-private → Routes:** only the `local` route.
 
 Optional, for a viva question on SQL: to run SQL directly against RDS, set
@@ -182,9 +186,12 @@ wait for any operation in progress to finish.
   server, enforced by a security-group-to-security-group rule rather than an IP
   range, so it keeps working when the app server's IP changes (and for several
   servers once scaling is added).
-- **Files on EBS, metadata in RDS (Lessons 7 and 8):** the briefing itself is
-  a Markdown + JSON file on the instance's disk; RDS holds what is searched
-  (tickers, date, type, client reference, filename) and the RM note.
+- **Discussions in RDS, a Markdown copy on EBS (instructor feedback; Lessons 7
+  and 8):** RDS holds the client, the discussion and its note, one row per
+  company with the values observed at the time, and the complete snapshot used
+  to reopen it. The instance's EBS disk keeps a readable Markdown copy. Because
+  reopening reads RDS, any app server can reopen any discussion, which is what
+  scaling needs.
 - **No NAT gateway:** the private subnets only hold the database, which needs
   no internet access. This also avoids the NAT gateway's hourly cost.
 - **Secrets via a NoEcho parameter:** the password is never stored in the

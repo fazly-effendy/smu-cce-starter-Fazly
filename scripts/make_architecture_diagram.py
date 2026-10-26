@@ -235,7 +235,7 @@ text(EC2_X, 559, "systemd service · Amazon Linux 2023", size=13, fill="#475569"
 
 cube(880, 420, 84, 40, "ebs", disk_glyph)
 text(880, 506, "EBS root volume", size=15, weight=700, anchor="middle")
-text(880, 526, "briefing files .md + .json", size=13, fill="#475569", anchor="middle")
+text(880, 526, "Markdown copy of each discussion", size=13, fill="#475569", anchor="middle")
 add(f'<path d="M690,440 L 828,440" stroke="#14796F" stroke-width="2.5" stroke-dasharray="3 5" stroke-linecap="round"/>')
 text(760, 432, "attached", size=12, weight=600, fill="#14796F", anchor="middle")
 
@@ -256,7 +256,7 @@ text(RDS_X, 890, "db.t3.micro · not publicly accessible", size=13, fill="#47556
 # Tables card
 panel(780, 708, 226, 166, fill="#FFFFFF", stroke="#C3CDF2", rx=12)
 text(798, 734, "Database  nimbus", size=14, weight=700, fill="#3743B5")
-for i, (name, what) in enumerate((("briefings", "metadata + filename"), ("briefing_tickers", "one row per ticker"), ("rm_notes", "RM meeting note"))):
+for i, (name, what) in enumerate((("clients", "client ID, name"), ("discussions", "notes, interests, snapshot"), ("discussion_companies", "price + ratios at the time"))):
     y = 764 + i * 38
     add(f'<rect x="798" y="{y - 12}" width="8" height="8" rx="2" fill="#7F6FD2"/>')
     text(814, y - 4, name, size=13, weight=600)

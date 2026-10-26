@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Dict, List, Optional
 
 import altair as alt
 import pandas as pd
 
 from analytics.formatting import NOT_AVAILABLE, format_price
+from analytics.ratios import MULTIPLE_RATIOS, TREND_LABELS
 from models.briefing import Briefing
 from ui.theme import NEUTRAL, RATING_COLOURS, SERIES
 
@@ -119,3 +120,31 @@ def ratings_chart(briefing: Briefing) -> Optional[alt.LayerChart]:
         y=y, x="Mid:Q", text="Label:N",
     )
     return alt.layer(bars, text).properties(height=alt.Step(BAR_ROW_PX), width="container")
+
+
+def trend_chart(records: List[Dict[str, object]], key: str) -> Optional[alt.LayerChart]:
+    """One measure (revenue growth, net margin or debt-to-equity) per fiscal year, one line per company.
+
+    records come from ui.tables.trend_records(). Percent measures use a % axis; debt-to-equity
+    is a multiple. Years without a value are left as gaps.
+    """
+    rows = [r for r in records if r["key"] == key and r["Value"] is not None]
+    if not rows:
+        return None
+    data = pd.DataFrame(rows)
+    data["Value"] = data["Value"].astype(float)
+    companies = list(dict.fromkeys(r["Company"] for r in records))
+    colours = SERIES[:len(companies)]
+    is_multiple = key in MULTIPLE_RATIOS
+    axis_format = ".2f" if is_multiple else ".0%"
+    base = alt.Chart(data).encode(
+        x=alt.X("Fiscal year:O", title=None, axis=alt.Axis(labelAngle=0)),
+        y=alt.Y("Value:Q", title=None, axis=alt.Axis(format=axis_format, tickCount=4)),
+        color=alt.Color("Company:N", scale=alt.Scale(domain=companies, range=colours),
+                        legend=alt.Legend(orient="bottom", title=None)),
+        tooltip=[alt.Tooltip("Company:N"), alt.Tooltip("FY end:N", title="Fiscal year end"),
+                 alt.Tooltip("Value:Q", title=TREND_LABELS[key], format=".2f" if is_multiple else ".1%")],
+    )
+    zero = alt.Chart(pd.DataFrame({"Value": [0.0]})).mark_rule(color=NEUTRAL, strokeWidth=1).encode(y="Value:Q")
+    return (alt.layer(zero, base.mark_line(strokeWidth=2), base.mark_circle(size=50))
+            .properties(height=200, width="container"))

@@ -18,7 +18,7 @@ import pandas as pd
 import streamlit as st
 
 from analytics.formatting import NOT_AVAILABLE, format_date, format_money, format_multiple, format_percent, format_price
-from analytics.ratios import RATIO_LABELS
+from analytics.ratios import RATIO_LABELS, TREND_LABELS, format_ratio, ratio_notes, ratio_trends
 from models.briefing import Briefing
 from ui.theme import DOWN
 
@@ -27,8 +27,9 @@ SURPRISE_UNUSUAL = 1.0  # EPS surprise above 100% (either way) is flagged
 PE_FLAG_TEXT = "Unusually high P/E: earnings may be depressed or include one-off items."
 SURPRISE_FLAG_TEXT = "Unusually large surprise: reported EPS may include one-off items."
 
-HIGHER_IS_BETTER = {"return", "revenue_growth", "net_income_growth", "net_margin", "return_on_assets"}
-LOWER_IS_BETTER = {"debt_to_assets"}
+HIGHER_IS_BETTER = {"return", "revenue_growth", "net_income_growth", "net_margin", "operating_margin",
+                    "return_on_assets"}
+LOWER_IS_BETTER = {"debt_to_assets", "debt_to_equity"}
 CONSENSUS_MARK = {"strong buy": "🟢", "buy": "🟢", "outperform": "🟢", "hold": "⚪", "underperform": "🔴",
                   "sell": "🔴", "strong sell": "🔴"}
 RESULT_MARK = {"beat": "🟢 Beat", "miss": "🔴 Miss", "in line": "⚪ In line"}
@@ -59,9 +60,11 @@ def comparison_rows(briefing: Briefing) -> List[Tuple[str, Optional[str], List[s
          [format_multiple(c.pe_ratio) + (" ⚠" if pe_is_unusual(c.pe_ratio) else "") for c in companies],
          [None] * len(companies)),
     ]
+    notes = [ratio_notes(c.financials, c.fiscal_year_end) for c in companies]
     for key, label in RATIO_LABELS.items():
         values = [c.ratios.get(key) for c in companies]
-        rows.append((label, key, [format_percent(v) for v in values], values))
+        shown = ["N/M" if key in note else format_ratio(key, v) for v, note in zip(values, notes)]
+        rows.append((label, key, shown, values))
     rows.append(("Ratios as of FY end", None,
                  [format_date(c.fiscal_year_end) if c.fiscal_year_end else NOT_AVAILABLE for c in companies],
                  [None] * len(companies)))
@@ -97,6 +100,38 @@ def comparison_styles(briefing: Briefing) -> pd.DataFrame:
                     css.append("font-weight: 700")
             styles.loc[label, column] = "; ".join(css)
     return styles
+
+
+def comparison_notes(briefing: Briefing) -> List[str]:
+    """Footnotes for N/M values in the comparison table."""
+    return [f"{c.ticker}: {note}" for c in briefing.companies
+            for note in ratio_notes(c.financials, c.fiscal_year_end).values()]
+
+
+# --------------------------------------------------------------------------
+# Trends over time
+# --------------------------------------------------------------------------
+
+def trend_records(briefing: Briefing) -> List[Dict[str, object]]:
+    """One record per company, fiscal year and trend measure (for charts and tables)."""
+    records = []
+    for company in briefing.companies:
+        for year, ratios in ratio_trends(company.financials).items():
+            for key, label in TREND_LABELS.items():
+                records.append({"Company": company.ticker, "Fiscal year": year[:4], "FY end": year,
+                                "key": key, "Measure": label, "Value": ratios.get(key)})
+    return records
+
+
+def trend_table(briefing: Briefing, key: str) -> pd.DataFrame:
+    """Rows = companies, columns = fiscal years, cells = the formatted measure."""
+    records = [r for r in trend_records(briefing) if r["key"] == key]
+    if not records:
+        return pd.DataFrame()
+    frame = pd.DataFrame(records)
+    wide = frame.pivot_table(index="Company", columns="Fiscal year", values="Value", aggfunc="first", dropna=False)
+    wide = wide.reindex([c.ticker for c in briefing.companies])
+    return wide.apply(lambda column: column.map(lambda v: format_ratio(key, None if pd.isna(v) else v)))
 
 
 # --------------------------------------------------------------------------

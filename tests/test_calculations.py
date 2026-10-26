@@ -145,3 +145,51 @@ def test_time_ago_and_eps():
     assert format_time_ago("2026-08-01T12:00:00Z", now) == "1 Aug 2026"
     assert format_time_ago(None, now) == "N/A"
     assert format_eps(3.6) == "3.60" and format_eps(None) == "N/A"
+
+
+# ---- instructor's comparison measures (Gaurav, 27 Oct 2026) --------------------------------
+
+FOUR_YEARS = {
+    "Revenue": {"2022-12-31": 100.0, "2023-12-31": 110.0, "2024-12-31": 121.0, "2025-12-31": 145.2},
+    "Operating income": {"2022-12-31": 20.0, "2023-12-31": 22.0, "2024-12-31": 30.25, "2025-12-31": 43.56},
+    "Net income": {"2022-12-31": 10.0, "2023-12-31": 11.0, "2024-12-31": 18.15, "2025-12-31": 29.04},
+    "Total debt": {"2022-12-31": 50.0, "2023-12-31": 45.0, "2024-12-31": 40.0, "2025-12-31": 30.0},
+    "Shareholders' equity": {"2022-12-31": 100.0, "2023-12-31": 90.0, "2024-12-31": 80.0, "2025-12-31": 60.0},
+}
+
+
+def test_debt_to_equity_and_operating_margin():
+    ratios, latest, _ = compute_ratios(FOUR_YEARS)
+    assert latest == "2025-12-31"
+    assert ratios["debt_to_equity"] == pytest.approx(30 / 60)
+    assert ratios["operating_margin"] == pytest.approx(43.56 / 145.2)
+
+
+def test_trends_cover_every_reported_year_oldest_first():
+    from analytics.ratios import ratio_trends
+
+    trends = ratio_trends(FOUR_YEARS)
+    assert list(trends) == ["2022-12-31", "2023-12-31", "2024-12-31", "2025-12-31"]
+    assert trends["2022-12-31"]["revenue_growth"] is None  # no year before it
+    assert [round(t["revenue_growth"], 3) for t in list(trends.values())[1:]] == [0.1, 0.1, 0.2]
+    assert [round(t["net_margin"], 3) for t in trends.values()] == [0.1, 0.1, 0.15, 0.2]
+    assert [round(t["debt_to_equity"], 3) for t in trends.values()] == [0.5, 0.5, 0.5, 0.5]
+
+
+def test_negative_equity_makes_debt_to_equity_not_meaningful():
+    from analytics.ratios import NEGATIVE_EQUITY_NOTE, ratio_notes
+
+    financials = {"Revenue": {"2025-12-31": 100.0}, "Total debt": {"2025-12-31": 50.0},
+                  "Shareholders' equity": {"2025-12-31": -5.0}}
+    ratios, latest, _ = compute_ratios(financials)
+    assert ratios["debt_to_equity"] is None
+    assert ratio_notes(financials, latest) == {"debt_to_equity": NEGATIVE_EQUITY_NOTE}
+    assert ratio_notes(FOUR_YEARS, "2025-12-31") == {}
+
+
+def test_debt_to_equity_is_shown_as_a_multiple():
+    from analytics.ratios import format_ratio
+
+    assert format_ratio("debt_to_equity", 0.4512) == "0.45x"
+    assert format_ratio("net_margin", 0.2) == "20.0%"
+    assert format_ratio("debt_to_equity", None) == "N/A"

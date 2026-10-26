@@ -1,10 +1,12 @@
-"""Nimbus: company briefings for relationship managers.
+"""Nimbus: client discussions for relationship managers.
 
 Run with:  python3 -m streamlit run src/app.py
 
-Workflow: generate a briefing for two or more companies -> compare them ->
-read financials, news and ratings -> add RM notes -> save -> search history
--> reopen a saved briefing exactly as it was.
+Workflow (the instructor's acceptance test): choose or enter a Client ID ->
+add two or more companies -> generate the comparison (share prices side by side,
+revenue growth, profit margins, debt-to-equity, trends) -> record the client's
+interests -> save the discussion snapshot -> search by client or company ->
+reopen it exactly as it was.
 
 This file holds only the user interface. Data retrieval lives in services/,
 calculations in analytics/, and saving/searching in storage/.
@@ -13,8 +15,7 @@ calculations in analytics/, and saving/searching in storage/.
 from __future__ import annotations
 
 import hashlib
-from datetime import date
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -22,7 +23,6 @@ import streamlit as st
 from analytics.formatting import (
     NOT_AVAILABLE,
     format_date,
-    format_eps,
     format_money,
     format_multiple,
     format_percent,
@@ -30,7 +30,7 @@ from analytics.formatting import (
     format_time_ago,
     format_timestamp,
 )
-from analytics.ratios import RATIO_LABELS
+from analytics.ratios import TREND_LABELS, format_ratio
 from config import (
     ANALYSIS_PERIODS,
     APP_VERSION,
@@ -43,7 +43,7 @@ from config import (
     timezone_label,
     to_local,
 )
-from models.briefing import ANALYSIS_TYPE, Briefing, RmNote
+from models.briefing import Briefing, RmNote
 from services import yahoo
 from services.briefing_builder import build_briefing, utc_now_iso
 from services.company_lookup import (
@@ -58,7 +58,7 @@ from storage import briefing_store, database, snapshots
 from ui import charts, tables, theme
 from ui.theme import chip, esc, flag, html_block, section
 
-st.set_page_config(page_title="Nimbus · Company briefings", page_icon="☁️", layout="wide")
+st.set_page_config(page_title="Nimbus · Client discussions", page_icon="☁️", layout="wide")
 
 POPULAR_TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "MU", "JPM", "D05.SI", "O39.SI", "U11.SI"]
 
@@ -110,6 +110,7 @@ def init_state() -> None:
     st.session_state.setdefault("typed_as", {})  # ticker -> what the user typed, e.g. "Google"
     st.session_state.setdefault("lookup_feedback", {})  # suggestions / not found, for the last search
     st.session_state.setdefault("pinned_articles", {})  # briefing_id -> article keys to keep with the note
+    st.session_state.setdefault("client_choice", NEW_CLIENT)  # existing client ID, or NEW_CLIENT
 
 
 # --------------------------------------------------------------------------
@@ -262,24 +263,7 @@ def render_comparison(briefing: Briefing) -> None:
             st.markdown("**Add another ticker to compare.**")
             st.caption("Only one company was retrieved. Add a second one above, or use Quick add, and generate again.")
 
-    section("Financial comparison")
-    st.table(tables.comparison_styler(briefing))
-    unusual = [c.ticker for c in companies if tables.pe_is_unusual(c.pe_ratio)]
-    st.caption("Bold = best in row (lowest for debt-to-assets). Red = negative. N/A = not reported by Yahoo."
-               + (f" ⚠ P/E above {tables.PE_UNUSUAL:.0f}x for {', '.join(unusual)}: earnings may be depressed "
-                  "or include one-off items." if unusual else ""))
-    with st.expander("How these measures are calculated"):
-        st.markdown(
-            "- **Return:** last ÷ first adjusted close over the dates all companies traded (includes dividends "
-            "and splits). Historical, not a forecast.\n"
-            "- **Revenue / net income growth:** latest fiscal year ÷ previous − 1; N/A if the previous year is "
-            "zero or negative.\n"
-            "- **Net profit margin:** net income ÷ revenue. **Return on assets:** net income ÷ total assets.\n"
-            "- **Debt-to-assets:** total debt ÷ total assets, at the same fiscal year-end.\n"
-            "- **N/A** means Yahoo Finance did not report the inputs. Nimbus never substitutes zero."
-        )
-
-    section("Share-price performance")
+    section("Share-price performance, side by side")
     chart = charts.price_chart(briefing)
     if chart is None:
         st.info("Not enough common trading days to draw a comparison chart.")
@@ -289,8 +273,55 @@ def render_comparison(briefing: Briefing) -> None:
             st.caption(f"Rebased to 100 on {format_date(briefing.price_window[0])}; adjusted closes to "
                        f"{format_date(briefing.price_window[1])} on days all companies traded. Hover for prices.")
 
+    section("Financial comparison")
+    st.table(tables.comparison_styler(briefing))
+    unusual = [c.ticker for c in companies if tables.pe_is_unusual(c.pe_ratio)]
+    st.caption("Bold = best in row (lowest for debt ratios). Red = negative. N/A = not reported by Yahoo."
+               + (f" ⚠ P/E above {tables.PE_UNUSUAL:.0f}x for {', '.join(unusual)}: earnings may be depressed "
+                  "or include one-off items." if unusual else ""))
+    for note in tables.comparison_notes(briefing):
+        st.caption(note)
+    with st.expander("How these measures are calculated"):
+        st.markdown(
+            "- **Return:** last ÷ first adjusted close over the dates all companies traded (includes dividends "
+            "and splits). Historical, not a forecast.\n"
+            "- **Revenue / net income growth:** latest fiscal year ÷ previous − 1; N/A if the previous year is "
+            "zero or negative.\n"
+            "- **Net profit margin:** net income ÷ revenue. **Operating margin:** operating income ÷ revenue.\n"
+            "- **Debt-to-equity:** total debt ÷ shareholders' equity at the same fiscal year-end; N/M (not "
+            "meaningful) when equity is zero or negative.\n"
+            "- **Return on assets:** net income ÷ total assets. **Debt-to-assets:** total debt ÷ total assets.\n"
+            "- Companies' fiscal years can end in different months; each column shows its own year-end.\n"
+            "- **N/A** means Yahoo Finance did not report the inputs. Nimbus never substitutes zero."
+        )
+
+    render_trends(briefing)
     render_analyst_view(briefing)
     render_earnings(briefing)
+
+
+def render_trends(briefing: Briefing) -> None:
+    """Revenue growth, net margin and debt-to-equity for each reported fiscal year."""
+    section("Trends over time (annual)")
+    records = tables.trend_records(briefing)
+    if not any(r["Value"] is not None for r in records):
+        st.info("Yahoo Finance did not report enough annual statements to show trends.")
+        return
+    columns = st.columns(len(TREND_LABELS))
+    for column, (key, label) in zip(columns, TREND_LABELS.items()):
+        with column:
+            st.markdown(f"**{label}**")
+            chart = charts.trend_chart(records, key)
+            if chart is None:
+                st.caption("Not reported.")
+            else:
+                st.altair_chart(chart)
+    with st.expander("Trend figures by fiscal year"):
+        for key, label in TREND_LABELS.items():
+            st.markdown(f"**{label}**")
+            st.table(tables.trend_table(briefing, key))
+    st.caption("Fiscal year = the calendar year in which each company's fiscal year ended. Growth needs the "
+               "previous year, so the oldest year has no growth figure.")
 
 
 def render_analyst_view(briefing: Briefing) -> None:
@@ -436,17 +467,18 @@ def render_news_status(briefing: Briefing) -> None:
 
 def render_note(note: Optional[RmNote]) -> None:
     if not note:
-        st.info("No RM note was saved with this briefing.")
+        st.info("No discussion note was saved.")
         return
     with st.container(border=True):
         left, right = st.columns(2)
-        left.markdown(f"**Client / briefing reference:** {md_text(note.client_reference)}")
-        left.markdown(f"**Meeting date:** {format_date(note.meeting_date)}")
+        left.markdown(f"**Client ID:** {md_text(note.client_id)}"
+                      + (f" · {md_text(note.client_name)}" if note.client_name else ""))
+        left.markdown(f"**Discussion date:** {format_date(note.discussion_date)}")
         right.markdown(f"**Next review date:** {format_date(note.next_review_date)}")
         right.markdown(f"**Note recorded:** {format_timestamp(note.created_at)}")
         for label, text in (
-            ("Discussion summary", note.discussion_summary),
-            ("Client priorities or concerns", note.client_priorities),
+            ("Client's interests", note.client_interests),
+            ("Discussion notes", note.notes),
             ("Follow-up actions", note.follow_up_actions),
             ("Other notes", note.free_text),
         ):
@@ -487,26 +519,27 @@ def sidebar() -> None:
             columns[index % 3].button(ticker, key=f"quick_{ticker}", on_click=quick_add, args=(ticker,),
                                       width="stretch")
 
-        theme.side_title("Recent briefings")
+        theme.side_title("Recent discussions")
         try:
-            recent = database.search_briefings(limit=5)
+            recent = database.search_discussions(limit=5)
             if not recent:
-                st.caption("🗂️ No saved briefings yet. Save one from **Notes** and it appears here.")
+                st.caption("🗂️ No saved discussions yet. Save one from **Discussion** and it appears here.")
         except Exception:
             recent = []
-            st.caption("⚠️ Saved briefings are unavailable: the database cannot be reached.")
+            st.caption("⚠️ Saved discussions are unavailable: the database cannot be reached.")
         for row in recent:
-            saved = to_local(row["saved_at"])
-            label = f"{row['tickers']} · {saved.day} {saved.strftime('%b %H:%M')}"
-            st.button(label, key=f"recent_{row['briefing_id']}", on_click=open_from_sidebar,
-                      args=(row["briefing_id"],), help=row["client_reference"] or None, width="stretch")
+            when = row["discussion_date"]
+            label = f"{row['client_id']} · {row['tickers']} · {when.day} {when.strftime('%b')}"
+            st.button(label, key=f"recent_{row['discussion_id']}", on_click=open_from_sidebar,
+                      args=(row["discussion_id"],), help=(row["client_interests"] or "")[:200] or None,
+                      width="stretch")
 
         theme.side_title("About")
         with st.expander("About the data"):
             st.markdown(
                 "- Market data, statements, ratings and news: **Yahoo Finance** (via yfinance)\n"
                 f"- Retrieved data is reused for {CACHE_TTL_SECONDS // 60} minutes\n"
-                "- Saved briefings are snapshots and are never refreshed\n"
+                "- Saved discussions are snapshots and are never refreshed\n"
                 "- Figures are historical, not forecasts or advice"
             )
         commit = deployed_commit()
@@ -522,7 +555,7 @@ def company_picker() -> None:
         on_change=on_company_query,
         placeholder="Type a name or ticker and press Enter, e.g. nvidia, Google, MU, or a list: AAPL, MSFT, DBS",
         help="Company names and tickers both work. Separate several with commas. "
-             f"Up to {MAX_COMPANIES} companies per briefing.",
+             f"Up to {MAX_COMPANIES} companies per comparison.",
     )
 
     feedback = st.session_state.get("lookup_feedback") or {}
@@ -556,7 +589,7 @@ def company_picker() -> None:
     # change, which would clear all chips when one is removed. It also lets users re-add a removed one.
     known = list(dict.fromkeys(list(companies) + list(selected)))
     st.multiselect(
-        "Companies in this briefing",
+        "Companies to compare",
         options=known,
         key="selected_tickers",
         format_func=lambda t: f"{t} · {companies[t].name}" if t in companies and companies[t].name != t else t,
@@ -583,14 +616,61 @@ def company_picker() -> None:
                                  on_change=switch_listing, args=(ticker,))
 
 
+NEW_CLIENT = "➕ New client"
+
+
+def client_options() -> Dict[str, str]:
+    """Existing clients for the selector: client_id -> label. Empty if the database is unreachable."""
+    try:
+        return {row["client_id"]: f"{row['client_id']}" + (f" · {row['client_name']}" if row["client_name"] else "")
+                + f" ({row['discussions']} saved)" for row in database.list_clients()}
+    except Exception:
+        return {}
+
+
+def selected_client() -> Tuple[Optional[str], Optional[str]]:
+    """(client ID, client name) chosen at the top of the page; ID is None if nothing usable is entered."""
+    choice = st.session_state.get("client_choice") or NEW_CLIENT
+    if choice != NEW_CLIENT:
+        return choice, None
+    raw = (st.session_state.get("new_client_id") or "").strip()
+    name = (st.session_state.get("new_client_name") or "").strip() or None
+    try:
+        return database.normalise_client_id(raw), name
+    except ValueError:
+        return None, name
+
+
+def client_picker() -> None:
+    """Step 1 of the workflow: choose an existing client or enter a new client ID."""
+    options = client_options()
+    choices = [NEW_CLIENT] + list(options)
+    if st.session_state.get("client_choice") not in choices:
+        st.session_state["client_choice"] = NEW_CLIENT
+    choice_col, id_col, name_col = st.columns([1.6, 1, 1.4], vertical_alignment="bottom")
+    choice = choice_col.selectbox("Client", choices, key="client_choice", format_func=lambda c: options.get(c, c),
+                                  help="Choose a client you have met before, or New client to enter a client ID.")
+    if choice == NEW_CLIENT:
+        id_col.text_input("Client ID *", key="new_client_id", placeholder="e.g. C-1001", max_chars=32,
+                          help="Letters, digits, - or _. Stored in capitals.")
+        name_col.text_input("Client name (optional)", key="new_client_name", max_chars=200)
+        typed = (st.session_state.get("new_client_id") or "").strip()
+        if typed:
+            try:
+                database.normalise_client_id(typed)
+            except ValueError as exc:
+                id_col.caption(f"⚠️ {exc}")
+
+
 def generate_section() -> None:
     with st.container(border=True):
-        html_block('<div class="nb-card-title">New briefing</div>')
+        html_block('<div class="nb-card-title">New client discussion</div>')
+        client_picker()
         company_picker()
         period_col, button_col, _ = st.columns([1.4, 1.6, 3], vertical_alignment="bottom")
         period_label = period_col.selectbox("Price period", list(ANALYSIS_PERIODS), key="period_label",
                                             help="Period for the share-price chart and returns")
-        clicked = button_col.button("Generate briefing", type="primary", width="content")
+        clicked = button_col.button("Generate comparison", type="primary", width="content")
 
     # The spinner and errors go in a container that exists on every run. If they were placed
     # directly on the page, the number of elements above the tabs would change between runs,
@@ -600,7 +680,7 @@ def generate_section() -> None:
             return
         tickers = list(st.session_state["selected_tickers"])
         if len(tickers) < 2:
-            st.error("Add at least two companies to generate a comparison briefing.")
+            st.error("Add at least two companies to generate a comparison.")
             return
         with st.spinner(f"Retrieving {', '.join(tickers)} from Yahoo Finance…"):
             briefing = build_briefing(
@@ -626,32 +706,44 @@ def pinned_articles(briefing: Briefing) -> List[Dict[str, Optional[str]]]:
     ]
 
 
-NOTE_FIELDS = ("ref", "meeting", "summary", "priorities", "actions", "review", "other")
+NOTE_FIELDS = ("date", "interests", "notes", "actions", "review", "other")
 
 
 def note_values(briefing: Briefing, prefix: str = "") -> Dict[str, object]:
-    """Current values of the note fields (prefix "" = Notes tab form, "dlg_" = save dialog)."""
+    """Current values of the note fields (prefix "" = Discussion tab, "dlg_" = save dialog)."""
     return {field: st.session_state.get(f"{prefix}{field}_{briefing.briefing_id}") for field in NOTE_FIELDS}
 
 
 def note_is_complete(values: Dict[str, object]) -> bool:
-    return bool((values.get("ref") or "").strip() and (values.get("summary") or "").strip())
+    return bool(selected_client()[0] and (values.get("interests") or "").strip())
+
+
+def missing_fields(values: Dict[str, object]) -> List[str]:
+    missing = []
+    if not selected_client()[0]:
+        missing.append("a client (choose one, or enter a valid Client ID at the top of the page)")
+    if not (values.get("interests") or "").strip():
+        missing.append("notes about the client's interests")
+    return missing
 
 
 def perform_save(briefing: Briefing, values: Dict[str, object]) -> bool:
-    """Save the briefing with the RM note built from `values`. Runs inside click handlers, i.e.
-    before the page is redrawn, so the sidebar's Recent briefings and the header show the saved
-    state straight away. Returns True on success."""
+    """Save the discussion with the note built from `values`. Runs inside click handlers, i.e.
+    before the page is redrawn, so the sidebar and the header show the saved state straight away.
+    Returns True on success."""
     state = st.session_state
-    if not note_is_complete(values):
-        state["save_error"] = "Please enter a client or briefing reference and a discussion summary before saving."
+    missing = missing_fields(values)
+    if missing:
+        state["save_error"] = "Please add " + " and ".join(missing) + " before saving."
         return False
-    meeting_date, review_date = values.get("meeting"), values.get("review")
+    client_id, client_name = selected_client()
+    discussion_date, review_date = values.get("date") or local_today(), values.get("review")
     note = RmNote(
-        client_reference=values["ref"].strip(),
-        meeting_date=meeting_date.isoformat() if meeting_date else None,
-        discussion_summary=values["summary"].strip(),
-        client_priorities=(values.get("priorities") or "").strip(),
+        client_id=client_id,
+        client_name=client_name,
+        discussion_date=discussion_date.isoformat(),
+        client_interests=values["interests"].strip(),
+        notes=(values.get("notes") or "").strip(),
         follow_up_actions=(values.get("actions") or "").strip(),
         next_review_date=review_date.isoformat() if review_date else None,
         free_text=(values.get("other") or "").strip(),
@@ -659,24 +751,25 @@ def perform_save(briefing: Briefing, values: Dict[str, object]) -> bool:
         saved_articles=pinned_articles(briefing),
     )
     try:
-        result = briefing_store.save_briefing(briefing, note)
+        result = briefing_store.save_discussion(briefing, note)
     except Exception as exc:
-        state["save_error"] = f"The briefing could not be saved: {exc}"
+        state["save_error"] = f"The discussion could not be saved: {exc}"
         return False
     state["saved"][briefing.briefing_id] = result.filename
     state["saved_note"] = result.briefing.note or note
+    state["client_choice"] = client_id  # a new client is now an existing one: select it
     state.pop("save_error", None)
-    state["toast"] = f"Briefing saved as {result.filename}"
+    state["toast"] = f"Discussion with {client_id} saved"
     return True
 
 
 def save_from_form(briefing: Briefing) -> None:
-    """'Save briefing and RM notes' in the Notes tab."""
+    """'Save discussion' in the Discussion tab."""
     perform_save(briefing, note_values(briefing))
 
 
 def save_from_header(briefing: Briefing) -> None:
-    """'💾 Save briefing' in the header: save at once if the note is filled in, else open the note dialog."""
+    """'💾 Save discussion' in the header: save at once if the note is complete, else open the dialog."""
     values = note_values(briefing)
     if note_is_complete(values):
         perform_save(briefing, values)
@@ -690,38 +783,44 @@ def save_from_dialog(briefing: Briefing) -> None:
 
 
 def note_fields(briefing: Briefing, prefix: str = "", prefill: Optional[Dict[str, object]] = None) -> None:
-    """The RM note inputs. The dialog (prefix "dlg_") starts from what was typed in the Notes tab."""
+    """The discussion note inputs. The dialog (prefix "dlg_") starts from what was typed in the tab."""
     key = briefing.briefing_id
     prefill = prefill or {}
 
     def k(field: str) -> str:
         return f"{prefix}{field}_{key}"
 
-    left, right = st.columns(2)
-    left.text_input("Client or briefing reference *", placeholder="e.g. Acme Holdings – Q4 review", key=k("ref"),
-                    value=prefill.get("ref") or "")
-    right.date_input("Meeting date", value=prefill.get("meeting") or local_today(), key=k("meeting"))
-    st.text_area("Discussion summary *", placeholder="What was discussed with the client?", key=k("summary"),
-                 value=prefill.get("summary") or "")
-    left, right = st.columns(2)
-    left.text_area("Client priorities or concerns", key=k("priorities"), value=prefill.get("priorities") or "")
-    right.text_area("Follow-up actions", key=k("actions"), value=prefill.get("actions") or "")
     left, right = st.columns([1, 3])
+    left.date_input("Discussion date *", value=prefill.get("date") or local_today(), key=k("date"))
+    right.text_area("Client's interests *", key=k("interests"), value=prefill.get("interests") or "",
+                    placeholder="What the client is interested in, e.g. dividend income, AI exposure, lower debt",
+                    height=90)
+    st.text_area("Discussion notes", key=k("notes"), value=prefill.get("notes") or "",
+                 placeholder="What was discussed with the client?")
+    left, right = st.columns(2)
+    left.text_area("Follow-up actions", key=k("actions"), value=prefill.get("actions") or "")
+    right.text_area("Other notes (optional)", key=k("other"), value=prefill.get("other") or "")
+    left, _ = st.columns([1, 3])
     left.date_input("Next review date (optional)", value=prefill.get("review"), key=k("review"))
-    right.text_area("Other notes (optional)", key=k("other"), height=68, value=prefill.get("other") or "")
 
 
-@st.dialog("Save briefing", width="large")
+def client_line() -> str:
+    client_id, client_name = selected_client()
+    if not client_id:
+        return "**Client:** ⚠️ none chosen yet. Choose or enter a Client ID at the top of the page."
+    return f"**Client:** {chip(client_id)}" + (f" {esc(client_name)}" if client_name else "")
+
+
+@st.dialog("Save discussion", width="large")
 def note_dialog(briefing: Briefing) -> None:
-    st.caption("Add the required note fields (*) to save this briefing. Anything typed in the Notes tab is "
-               "carried over.")
+    st.caption("Fields marked * are required. Anything typed in the Discussion tab is carried over.")
+    st.markdown(client_line(), unsafe_allow_html=True)
     error = st.session_state.pop("save_error", None)
     if error:
         st.error(error)
     with st.form(f"dlg_note_form_{briefing.briefing_id}"):
         note_fields(briefing, prefix="dlg_", prefill=note_values(briefing))
-        st.form_submit_button("💾 Save briefing and RM notes", type="primary", on_click=save_from_dialog,
-                              args=(briefing,))
+        st.form_submit_button("💾 Save discussion", type="primary", on_click=save_from_dialog, args=(briefing,))
 
 
 def data_retrieved_at(briefing: Briefing) -> str:
@@ -736,20 +835,20 @@ def data_retrieved_at(briefing: Briefing) -> str:
 def briefing_header(briefing: Briefing) -> None:
     """Summary line, saved/unsaved indicator and a Save button that is visible from every tab."""
     saved = st.session_state["saved"].get(briefing.briefing_id)
-    info_col, status_col, button_col = st.columns([5, 1.2, 1.6], vertical_alignment="center")
+    info_col, status_col, button_col = st.columns([5, 1.3, 1.6], vertical_alignment="center")
     retrieved = data_retrieved_at(briefing)
     when = f"generated {format_timestamp(briefing.created_at)}"
     if format_timestamp(retrieved) != format_timestamp(briefing.created_at):
         when += f" from data retrieved {format_timestamp(retrieved)}"
-    info_col.caption(f"Briefing for {', '.join(briefing.successful_tickers)} · {when} · "
+    info_col.caption(f"Comparison of {', '.join(briefing.successful_tickers)} · {when} · "
                      f"price period {briefing.analysis_period}")
     if saved:
         status_col.markdown(chip("✓ Saved", "up", tooltip=saved), unsafe_allow_html=True)
     else:
-        status_col.markdown(chip("● Unsaved briefing", "warn",
-                                 tooltip="Not saved yet. Save to keep it in Briefing history."),
+        status_col.markdown(chip("● Unsaved discussion", "warn",
+                                 tooltip="Not saved yet. Save to keep it in History."),
                             unsafe_allow_html=True)
-        button_col.button("💾 Save briefing", type="primary", key="header_save", width="content",
+        button_col.button("💾 Save discussion", type="primary", key="header_save", width="content",
                           on_click=save_from_header, args=(briefing,))
     if st.session_state.pop("open_note_dialog", None) == briefing.briefing_id:
         note_dialog(briefing)
@@ -757,34 +856,37 @@ def briefing_header(briefing: Briefing) -> None:
 
 def notes_and_save_section(briefing: Optional[Briefing]) -> None:
     if briefing is None:
-        st.info("Generate a briefing first, then record your meeting notes here.")
+        st.info("Choose a client and generate a comparison first, then record the discussion here.")
         return
     saved_filename = st.session_state["saved"].get(briefing.briefing_id)
     if saved_filename:
-        st.success(f"This briefing and its RM note were saved as **{saved_filename}**.")
-        st.caption("Find it under History or Recent briefings in the sidebar. Generate a new briefing to start another.")
+        st.success("This discussion snapshot was saved.")
+        st.caption(f"Find it under History or Recent discussions in the sidebar. File: {saved_filename}. "
+                   "Generate a new comparison to start another discussion.")
         render_note(st.session_state.get("saved_note"))
         return
     if not briefing.companies:
         st.warning("There is no retrieved company data to save.")
         return
 
+    st.markdown(client_line(), unsafe_allow_html=True)
     st.caption(
-        f"Notes will be saved together with the briefing for {', '.join(briefing.successful_tickers)} "
-        f"generated {format_timestamp(briefing.created_at)}. Fields marked * are required."
+        f"Saved together with the comparison of {', '.join(briefing.successful_tickers)} "
+        f"(stock prices, ratios and news as retrieved {format_timestamp(data_retrieved_at(briefing))}). "
+        "Fields marked * are required."
     )
     articles = pinned_articles(briefing)
     if articles:
-        st.markdown(f"**Articles to keep with this note ({len(articles)})**")
+        st.markdown(f"**Articles to keep with this discussion ({len(articles)})**")
         st.markdown(render_article_list(articles))
     else:
-        st.caption("Tip: use **Save to note** in the News tab to keep relevant articles with this note.")
+        st.caption("Tip: use **Save to note** in the News tab to keep relevant articles with this discussion.")
 
     # Plain inputs (not an st.form), so what the RM types is always available to the header's
     # Save button and the save dialog, not only after this tab's own button is pressed.
     with st.container(border=True):
         note_fields(briefing)
-        st.button("💾 Save briefing and RM notes", type="primary", key="notes_save", on_click=save_from_form,
+        st.button("💾 Save discussion", type="primary", key="notes_save", on_click=save_from_form,
                   args=(briefing,))
 
     error = st.session_state.pop("save_error", None)
@@ -792,56 +894,58 @@ def notes_and_save_section(briefing: Optional[Briefing]) -> None:
         st.error(error)
 
 
+ALL_CLIENTS = "All clients"
+
+
 def history_section() -> None:
     url = database_url()
     try:
         counts = database.count_rows()
     except Exception as exc:
-        st.error(f"Cannot reach the briefing database ({describe_database_url(url)}): {exc}")
+        st.error(f"Cannot reach the discussion database ({describe_database_url(url)}): {exc}")
         return
 
     def plural(count: int, word: str) -> str:
         return f"{count} {word}{'' if count == 1 else 's'}"
 
     st.caption(
-        f"Database: {describe_database_url(url)} · {plural(counts['briefings'], 'briefing')}, "
-        f"{plural(counts['briefing_tickers'], 'ticker record')}, {plural(counts['rm_notes'], 'RM note')}."
+        f"Database: {describe_database_url(url)} · {plural(counts['clients'], 'client')}, "
+        f"{plural(counts['discussions'], 'discussion')}, "
+        f"{plural(counts['discussion_companies'], 'company record')}."
     )
 
+    options = client_options()
     with st.form("history_search_form"):
-        # Two rows, so the date boxes are wide enough to show the whole date.
-        c1, c2, c3 = st.columns([1, 2, 1])
-        ticker = c1.text_input("Ticker", placeholder="e.g. MU")
-        client_reference = c2.text_input("Client / briefing reference contains")
-        analysis_type = c3.selectbox("Analysis type", ["All", ANALYSIS_TYPE])
+        c1, c2 = st.columns([1, 1])
+        client = c1.selectbox("Client", [ALL_CLIENTS] + list(options), format_func=lambda c: options.get(c, c),
+                              key="history_client")
+        company = c2.text_input("Company (ticker or name)", placeholder="e.g. NVDA or nvidia", key="history_company")
         d1, d2, _ = st.columns([1, 1, 2])
-        date_from = d1.date_input(f"Saved from ({timezone_label()})", value=None)
-        date_to = d2.date_input(f"Saved to ({timezone_label()})", value=None)
+        date_from = d1.date_input(f"Discussion from ({timezone_label()})", value=None)
+        date_to = d2.date_input(f"Discussion to ({timezone_label()})", value=None)
         submitted = st.form_submit_button("Search")
     if submitted:
         if date_from and date_to and date_from > date_to:
             # Show only the error: listing the previous results under it would look like an answer.
-            st.error("“Saved from” is after “Saved to”. Swap the dates and search again.")
+            st.error("“Discussion from” is after “Discussion to”. Swap the dates and search again.")
             return
-        else:
-            st.session_state["history_filters"] = {
-                "ticker": ticker,
-                "date_from": date_from,
-                "date_to": date_to,
-                "client_reference": client_reference,
-                "analysis_type": None if analysis_type == "All" else analysis_type,
-            }
-            st.session_state["open_briefing_id"] = None
+        st.session_state["history_filters"] = {
+            "client_id": None if client == ALL_CLIENTS else client,
+            "company": company,
+            "date_from": date_from,
+            "date_to": date_to,
+        }
+        st.session_state["open_briefing_id"] = None
 
     try:
-        results = database.search_briefings(**st.session_state["history_filters"])
+        results = database.search_discussions(**st.session_state["history_filters"])
     except Exception as exc:
         st.error(f"Search failed: {exc}")
         return
 
     open_id = st.session_state.get("open_briefing_id")
     if not results and not open_id:
-        st.info("No saved briefings match these filters.")
+        st.info("No saved discussions match these filters.")
         return
 
     if results:
@@ -849,12 +953,11 @@ def history_section() -> None:
             pd.DataFrame(
                 [
                     {
-                        f"Saved ({timezone_label()})": to_local(row["saved_at"]).strftime("%Y-%m-%d %H:%M"),
+                        "Discussion date": format_date(row["discussion_date"].isoformat()),
+                        "Client": row["client_id"] + (f" · {row['client_name']}" if row["client_name"] else ""),
                         "Companies": row["tickers"],
-                        "Client / reference": row["client_reference"] or "",
-                        "Type": row["analysis_type"],
-                        "Price period": row["analysis_period"],
-                        "File": row["filename"],
+                        "Client's interests": (row["client_interests"] or "")[:80],
+                        f"Saved ({timezone_label()})": to_local(row["created_at"]).strftime("%Y-%m-%d %H:%M"),
                     }
                     for row in results
                 ]
@@ -862,18 +965,18 @@ def history_section() -> None:
             hide_index=True,
         )
         labels = {
-            row["briefing_id"]: f"{to_local(row['saved_at']).strftime('%Y-%m-%d %H:%M')} · {row['tickers']} · "
-            f"{row['client_reference'] or 'no reference'}"
+            row["discussion_id"]: f"{format_date(row['discussion_date'].isoformat())} · {row['client_id']} · "
+            f"{row['tickers']}"
             for row in results
         }
-        options = list(labels)
+        options_ids = list(labels)
         left, right = st.columns([4, 1], vertical_alignment="bottom")
-        # Show the briefing that is open below (e.g. opened from the sidebar), so the selector and
-        # the page never disagree. Keyed by the open briefing so the default follows it.
-        chosen = left.selectbox("Choose a saved briefing", options, format_func=labels.get,
-                                index=options.index(open_id) if open_id in options else 0,
+        # Show the discussion that is open below (e.g. opened from the sidebar), so the selector and
+        # the page never disagree. Keyed by the open discussion so the default follows it.
+        chosen = left.selectbox("Choose a saved discussion", options_ids, format_func=labels.get,
+                                index=options_ids.index(open_id) if open_id in options_ids else 0,
                                 key=f"history_choice_{open_id or 'none'}")
-        if right.button("Open briefing"):
+        if right.button("Open discussion"):
             st.session_state["open_briefing_id"] = chosen
             open_id = chosen
 
@@ -881,35 +984,63 @@ def history_section() -> None:
         render_historical(open_id)
 
 
+def render_saved_values(discussion_id: str) -> None:
+    """The per-company rows stored in the database: the values observed at the discussion."""
+    rows = database.get_companies(discussion_id)
+    if not rows:
+        return
+    frame = pd.DataFrame(
+        {
+            row["ticker"]: [
+                row["company_name"] or row["ticker"],
+                format_price(row["stock_price"], row["currency"]),
+                format_date(row["price_date"].isoformat()) if row["price_date"] else NOT_AVAILABLE,
+                format_ratio("revenue_growth", row["revenue_growth"]),
+                format_ratio("net_margin", row["net_margin"]),
+                format_ratio("operating_margin", row["operating_margin"]),
+                format_ratio("debt_to_equity", row["debt_to_equity"]),
+                format_date(row["fiscal_year_end"].isoformat()) if row["fiscal_year_end"] else NOT_AVAILABLE,
+                row["source"],
+            ]
+            for row in rows
+        },
+        index=["Company", "Stock price at discussion", "Price date", "Revenue growth (YoY)", "Net profit margin",
+               "Operating margin", "Debt-to-equity", "Ratios as of FY end", "Source"],
+    )
+    st.table(frame)
+    st.caption("Read from the database (discussion_companies): the values recorded when this discussion was "
+               "saved.")
+
+
 def render_historical(briefing_id: str) -> None:
     try:
-        briefing, row = briefing_store.open_briefing(briefing_id)
+        briefing, row = briefing_store.open_discussion(briefing_id)
     except Exception as exc:
-        st.error(f"Could not open the saved briefing: {exc}")
+        st.error(f"Could not open the saved discussion: {exc}")
         return
     st.divider()
     left, right = st.columns([4, 1], vertical_alignment="bottom")
-    left.markdown(f'<div class="nb-section">Saved briefing · {esc(", ".join(briefing.successful_tickers))}</div>',
-                  unsafe_allow_html=True)
-    try:
-        right.download_button(
-            "Download as Markdown",
-            data=snapshots.read_markdown(row["filename"]),
-            file_name=row["filename"],
-            mime="text/markdown",
-            key=f"download_{briefing_id}",
-        )
-    except (OSError, ValueError):
-        right.caption("Markdown file not available on this machine.")
+    client = row["client_id"] + (f" · {row['client_name']}" if row.get("client_name") else "")
+    left.markdown(f'<div class="nb-section">Saved discussion · {esc(client)} · '
+                  f'{esc(", ".join(briefing.successful_tickers))}</div>', unsafe_allow_html=True)
+    right.download_button(
+        "Download as Markdown",
+        data=snapshots.markdown_for(briefing, row["filename"]),
+        file_name=row["filename"],
+        mime="text/markdown",
+        key=f"download_{briefing_id}",
+    )
     st.info(
-        f"📁 **Historical snapshot.** Saved {format_timestamp(briefing.saved_at)}; data retrieved "
-        f"{format_timestamp(data_retrieved_at(briefing))}. These figures are exactly as saved; Nimbus has not "
-        "retrieved current data."
+        f"📁 **Historical snapshot.** Discussion on {format_date(row['discussion_date'].isoformat())}; saved "
+        f"{format_timestamp(briefing.saved_at)}; data retrieved {format_timestamp(data_retrieved_at(briefing))}. "
+        "These figures are exactly as saved; Nimbus has not retrieved current data."
     )
     render_notices(briefing)
-    section("RM notes")
+    section("Discussion")
     render_note(briefing.note)
-    section("Company comparison")
+    section("Values at the time of the discussion")
+    render_saved_values(briefing_id)
+    section("Comparison as saved")
     render_comparison(briefing)
     section("Financial statements")
     render_financials(briefing)
@@ -926,7 +1057,7 @@ def main() -> None:
     theme.inject_css()
     sidebar()
 
-    theme.header("Company briefings for relationship managers")
+    theme.header("Client discussions for relationship managers")
     generate_section()
 
     briefing: Optional[Briefing] = st.session_state.get("briefing")
@@ -943,22 +1074,22 @@ def main() -> None:
         st.toast(toast, icon="✅")
 
     if st.session_state.pop("sidebar_opened", False):
-        st.toast("Saved briefing opened in the History tab.", icon="📁")
+        st.toast("Saved discussion opened in the History tab.", icon="📁")
 
-    tabs = st.tabs(["📊 Compare", "📑 Financials", "📰 News", "📝 Notes", "🗂️ History"])
+    tabs = st.tabs(["📊 Compare", "📑 Financials", "📰 News", "📝 Discussion", "🗂️ History"])
     with tabs[0]:
         if briefing is None:
-            st.info("Enter at least two companies above and select **Generate briefing**.")
+            st.info("Choose a client, add at least two companies above and select **Generate comparison**.")
         else:
             render_comparison(briefing)
     with tabs[1]:
         if briefing is None:
-            st.info("Generate a briefing to see financial statements.")
+            st.info("Generate a comparison to see financial statements.")
         else:
             render_financials(briefing)
     with tabs[2]:
         if briefing is None:
-            st.info("Generate a briefing to see the latest news for its companies.")
+            st.info("Generate a comparison to see the latest news for its companies.")
         else:
             render_news_feed(briefing, live=True)
     with tabs[3]:

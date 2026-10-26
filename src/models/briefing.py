@@ -1,8 +1,10 @@
-"""Shared data structures for a Nimbus company briefing.
+"""Shared data structures for a Nimbus client-discussion snapshot.
 
-A Briefing is the complete result of one "Generate briefing" run plus the RM
-note added before saving. It converts to and from plain dictionaries so it can
-be saved as a JSON snapshot and reopened later exactly as it was.
+A Briefing is the complete result of one "Generate" run (2+ companies) plus the
+RM's discussion note (RmNote: client ID, discussion date, client interests...).
+Saved together they form a client-discussion snapshot. It converts to and from
+plain dictionaries so it can be stored as JSON (in the database) and reopened
+later exactly as it was.
 """
 
 from __future__ import annotations
@@ -10,8 +12,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
 
-SCHEMA_VERSION = 3  # 2: price_history; 3: news thumbnails, analyst view, earnings, saved articles
-ANALYSIS_TYPE = "company_briefing"
+SCHEMA_VERSION = 4  # 2: price_history; 3: news, analyst view, earnings; 4: client discussions
+ANALYSIS_TYPE = "client_discussion"
 
 
 @dataclass
@@ -67,16 +69,28 @@ class CompanySnapshot:
 
 @dataclass
 class RmNote:
-    client_reference: str
-    meeting_date: Optional[str]  # YYYY-MM-DD
-    discussion_summary: str
-    client_priorities: str
-    follow_up_actions: str
-    next_review_date: Optional[str]  # YYYY-MM-DD
-    free_text: str
-    created_at: str  # ISO 8601 UTC
+    """The RM's record of a client discussion. Required: client_id, discussion_date, client_interests."""
+
+    client_id: str  # e.g. "C-1001"
+    discussion_date: Optional[str]  # YYYY-MM-DD, local date of the meeting
+    client_interests: str  # notes about the client's interests (required)
+    notes: str = ""  # discussion summary (optional)
+    follow_up_actions: str = ""
+    next_review_date: Optional[str] = None  # YYYY-MM-DD
+    free_text: str = ""  # other notes
+    created_at: str = ""  # ISO 8601 UTC, when the note was saved
+    client_name: Optional[str] = None
     # News articles the RM chose to keep with this note (ticker, headline, publisher, published_at, source_url)
     saved_articles: List[Dict[str, Optional[str]]] = field(default_factory=list)
+
+    # Field names used by snapshots saved before schema 4.
+    LEGACY_NAMES = {"client_reference": "client_id", "meeting_date": "discussion_date",
+                    "client_priorities": "client_interests", "discussion_summary": "notes"}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "RmNote":
+        values = {cls.LEGACY_NAMES.get(key, key): value for key, value in data.items()}
+        return cls(**values)
 
 
 @dataclass
@@ -107,7 +121,7 @@ class Briefing:
     def from_dict(cls, data: dict) -> "Briefing":
         values = dict(data)
         values["companies"] = [CompanySnapshot.from_dict(c) for c in data.get("companies", [])]
-        values["note"] = RmNote(**data["note"]) if data.get("note") else None
+        values["note"] = RmNote.from_dict(data["note"]) if data.get("note") else None
         return cls(**values)
 
     @property

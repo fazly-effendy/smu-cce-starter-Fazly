@@ -67,7 +67,7 @@
 <polygon points="838.0,420 880,444.36 880,484.36 838.0,460" fill="#1FA598"/><polygon points="880,444.36 922.0,420 922.0,460 880,484.36" fill="#14796F"/><polygon points="838.0,420 880,395.64 922.0,420 880,444.36" fill="#86E3D6"/>
 <g transform="matrix(0.42,0.24359999999999998,0,1,838.0,420)"><rect x="24" y="12.0" width="52" height="16.0" rx="5" fill="#D8FBF6" opacity=".95"/><rect x="32" y="16.8" width="36" height="5" rx="2" fill="#14796F"/><rect x="32" y="21.6" width="24" height="5" rx="2" fill="#14796F"/></g>
 <text x="880" y="506" font-size="15" font-weight="700" fill="#1E293B" text-anchor="middle" opacity="1.0">EBS root volume</text>
-<text x="880" y="526" font-size="13" font-weight="400" fill="#475569" text-anchor="middle" opacity="1.0">briefing files .md + .json</text>
+<text x="880" y="526" font-size="13" font-weight="400" fill="#475569" text-anchor="middle" opacity="1.0">Markdown copy of each discussion</text>
 <path d="M690,440 L 828,440" stroke="#14796F" stroke-width="2.5" stroke-dasharray="3 5" stroke-linecap="round"/>
 <text x="760" y="432" font-size="12" font-weight="600" fill="#14796F" text-anchor="middle" opacity="1.0">attached</text>
 <rect x="652" y="586" width="352" height="30" rx="8" fill="#E4ECFF" stroke="#1F4FB8" stroke-opacity=".35"/>
@@ -94,14 +94,14 @@
 <rect x="780" y="708" width="226" height="166" rx="12" fill="#FFFFFF" stroke="#C3CDF2" stroke-width="1.6"/>
 <text x="798" y="734" font-size="14" font-weight="700" fill="#3743B5" text-anchor="start" opacity="1.0">Database  nimbus</text>
 <rect x="798" y="752" width="8" height="8" rx="2" fill="#7F6FD2"/>
-<text x="814" y="760" font-size="13" font-weight="600" fill="#1E293B" text-anchor="start" opacity="1.0">briefings</text>
-<text x="814" y="775" font-size="11.5" font-weight="400" fill="#64748B" text-anchor="start" opacity="1.0">metadata + filename</text>
+<text x="814" y="760" font-size="13" font-weight="600" fill="#1E293B" text-anchor="start" opacity="1.0">clients</text>
+<text x="814" y="775" font-size="11.5" font-weight="400" fill="#64748B" text-anchor="start" opacity="1.0">client ID, name</text>
 <rect x="798" y="790" width="8" height="8" rx="2" fill="#7F6FD2"/>
-<text x="814" y="798" font-size="13" font-weight="600" fill="#1E293B" text-anchor="start" opacity="1.0">briefing_tickers</text>
-<text x="814" y="813" font-size="11.5" font-weight="400" fill="#64748B" text-anchor="start" opacity="1.0">one row per ticker</text>
+<text x="814" y="798" font-size="13" font-weight="600" fill="#1E293B" text-anchor="start" opacity="1.0">discussions</text>
+<text x="814" y="813" font-size="11.5" font-weight="400" fill="#64748B" text-anchor="start" opacity="1.0">notes, interests, snapshot</text>
 <rect x="798" y="828" width="8" height="8" rx="2" fill="#7F6FD2"/>
-<text x="814" y="836" font-size="13" font-weight="600" fill="#1E293B" text-anchor="start" opacity="1.0">rm_notes</text>
-<text x="814" y="851" font-size="11.5" font-weight="400" fill="#64748B" text-anchor="start" opacity="1.0">RM meeting note</text>
+<text x="814" y="836" font-size="13" font-weight="600" fill="#1E293B" text-anchor="start" opacity="1.0">discussion_companies</text>
+<text x="814" y="851" font-size="11.5" font-weight="400" fill="#64748B" text-anchor="start" opacity="1.0">price + ratios at the time</text>
 <rect x="652" y="920" width="340" height="30" rx="8" fill="#E9E7FF" stroke="#4338CA" stroke-opacity=".35"/>
 <g transform="translate(664,926)"><rect x="0" y="6" width="12" height="10" rx="2" fill="#4338CA"/><path d="M2.5 6 V4 a3.5 3.5 0 0 1 7 0 V6" stroke="#4338CA" stroke-width="2" fill="none"/></g>
 <text x="684" y="940" font-size="12.6" fill="#4338CA"><tspan font-weight="700">nimbus-db-sg</tspan><tspan dx="6">in: 3306 from nimbus-app-sg only</tspan></text>

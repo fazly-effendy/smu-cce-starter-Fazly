@@ -1,19 +1,25 @@
-# ☁️ Nimbus: company briefings for relationship managers
+# ☁️ Nimbus: client discussions for relationship managers
 
 Nimbus turns three separate Python notebooks (company financials, company news,
-stock prices and analyst ratings) into one browser-based application. A
-relationship manager (RM) can compare companies, review formatted financials,
-read sourced news, record meeting notes, save the whole briefing, and later
-search for it and reopen it exactly as it was.
+stock prices and analyst ratings) into one browser-based application for a
+bank's relationship managers (RMs). Before or after meeting a client, an RM
+picks the client, compares two or more companies (share prices side by side,
+revenue growth, profit margins, debt-to-equity and their trends), reads
+sourced news, records what the client is interested in, and saves the whole
+discussion. Later they find it again by client or by company and reopen it
+exactly as it was.
 
 Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 
-> **Status (v0.9.1).** Features 1–5 work end to end in GitHub Codespaces
-> (SQLite and local files) and on AWS: CloudFormation creates the VPC, EC2 app
-> server and Amazon RDS for MySQL, and an independent audit on 25 Oct 2026
-> confirmed generate → compare → note → save → search → reopen against RDS.
-> Auto scaling (Feature 6) follows the Week 9 lesson; see
-> [Project status](#project-status) and [Known limitations](#known-limitations).
+> **Status (v0.10.0).** Implements the instructor's feedback of 27 Oct 2026:
+> client-discussion snapshots (Client ID, ticker, discussion date, stock price
+> at the time, client's interests) stored in `clients`, `discussions` and
+> `discussion_companies`, retrievable by client and by company. The
+> instructor's acceptance test steps 1–11 pass as an automated test
+> (`tests/test_app_workflow.py`); step 12 (the same on Amazon RDS) is the next
+> AWS deployment. The AWS environment itself (CloudFormation: VPC, EC2, RDS)
+> was deployed and verified on 25 and 27 Oct 2026. Auto scaling (Feature 6)
+> follows the Week 9 lesson; see [Project status](#project-status).
 
 ---
 
@@ -59,64 +65,69 @@ install Jupyter support: `pip install jupyter ipykernel`.
 
 ## Using Nimbus: the demo flow
 
-1. **New briefing:** in **Find companies**, type a company name or ticker and
-   press Enter (`nvidia`, `Google`, `MU`), or a list (`Apple, Microsoft, DBS`).
-   - Well-known names are added at once. For other names Nimbus searches Yahoo
-     Finance and lists the matches (e.g. *NVIDIA Corporation (NVDA) · NASDAQ*)
-     with an **Add** button.
-   - A misspelling gives one short message with a suggestion
-     ("No company found for “Microsft”. Did you mean Microsoft Corporation (MSFT)?").
-   - Chosen companies appear as chips (click × to remove) and in a check list
-     showing name, ticker and exchange. Where a name has several listings
-     (Google → GOOGL or GOOG), the list lets you switch.
-   - **Quick add** in the sidebar adds popular tickers. Up to 6 companies.
+This is the instructor's acceptance test, step by step.
 
-   Then choose a share-price period and select **Generate briefing**. Any
-   company Yahoo cannot supply is listed in one collapsible notice.
-2. **📊 Compare:** a card per company (last close with period return, market
-   cap, P/E), the financial comparison table, an interactive share-price chart
-   rebased to 100 (hover for date and actual price), the **analyst view**
-   (share of buy/hold/sell ratings, consensus, mean price target and upside)
-   and **earnings** (next date and EPS estimate; last result as beat or miss).
-3. **📑 Financials:** annual statement line items, formatted in millions,
-   billions or trillions.
-4. **📰 News:** one feed for all companies, newest first, filterable by
-   company. Each card shows the linked headline, company, publisher, how long
-   ago it was published, the summary and a thumbnail where Yahoo provides one.
-   **Save to note** keeps an article with the RM note.
-5. **📝 Notes:** fill in the meeting note (any articles you saved are
-   listed), then select **💾 Save briefing and RM notes**. You can also save
-   from any tab with **💾 Save briefing** next to the briefing summary: it saves
-   at once if the note is filled in, or opens the note in a pop-up if not. An
-   "Unsaved briefing" marker shows until it is saved; a confirmation appears
-   and the briefing is listed under Recent briefings straight away. Each
-   briefing can be saved once.
-6. **🗂️ History:** filter by ticker, date range, client reference or analysis
-   type; choose a result and select **Open briefing**. The five most recent
-   briefings are also one click away in the sidebar. A reopened briefing is
-   labelled as a historical snapshot and is never refreshed.
+1. **Client (step 1).** At the top of **New client discussion**, choose an
+   existing client, or keep **➕ New client** and type a **Client ID** (e.g.
+   `C-1001`; stored in capitals) and, optionally, the client's name.
+2. **Companies (step 2).** In **Find companies**, type names or tickers and
+   press Enter (`nvidia`, `Google`, `MU`, or a list such as
+   `Apple, Microsoft, DBS`).
+   - Well-known names are added at once. For other names Nimbus searches Yahoo
+     Finance and lists the matches with an **Add** button; a misspelling gives
+     one short message with a suggestion.
+   - Chosen companies appear as chips (click × to remove) and in a check list
+     with name, ticker and exchange. **Quick add** in the sidebar adds popular
+     tickers. 2 to 6 companies.
+3. **Generate comparison (step 3).** Choose a share-price period and select
+   **Generate comparison**. Any company Yahoo cannot supply is listed in one
+   collapsible notice; the others continue.
+4. **📊 Compare (steps 4–5).**
+   - **Share-price performance, side by side:** one chart, every company
+     rebased to 100 (hover for the actual price), plus each company's last
+     close and period return on its card.
+   - **Financial comparison:** revenue growth, net profit margin, operating
+     margin, **debt-to-equity**, net income growth, return on assets,
+     debt-to-assets, P/E and market cap, with each company's fiscal year-end.
+   - **Trends over time:** revenue growth, net margin and debt-to-equity for
+     every fiscal year Yahoo reports, as charts and as a table.
+   - Analyst view and earnings dates (context only).
+5. **📑 Financials / 📰 News:** formatted annual statements; one news feed with
+   linked headlines, publisher, date and summary. **Save to note** keeps an
+   article with the discussion.
+6. **📝 Discussion (steps 6–7).** The discussion date (today by default) and
+   **the client's interests** are required; discussion notes, follow-up
+   actions and a review date are optional. Select **💾 Save discussion**, here or
+   in the header from any tab. Each discussion is saved once.
+7. **🗂️ History (steps 8–10).** Filter by **client**, by **company** (ticker
+   or name) and by discussion date; choose a result and select **Open
+   discussion**. The five most recent discussions are also in the sidebar. A
+   reopened discussion is labelled as a historical snapshot, shows the note,
+   the **values at the time of the discussion** read from the database, and the
+   comparison exactly as saved. It is never refreshed.
 
 ---
 
 ## Project status
 
-Features are those agreed in the Lesson 4 Feature Request Workshop. Marking
+Features are those agreed in the Lesson 4 Feature Request Workshop, as
+clarified by the instructor's feedback on our proposal (27 Oct 2026). Marking
 criteria are from the Lesson 5 slides.
 
 | # | Feature | What Nimbus does | Status |
 |---|---|---|---|
-| 1 | Unified UI | One app combining financials, news and price/ratings; numbers formatted ($416.16B, 12.3%); news shows summary, publisher, date and source link; companies can be found by name or ticker | ✅ Working locally |
-| 2 | Company comparison | Two or more companies; revenue and net-income growth, net margin, return on assets, debt-to-assets, P/E, market cap; rebased share-price chart and holding-period return | ✅ Working locally |
-| 3 | Storage: save analysis | Complete briefing saved as a Markdown file (plus JSON snapshot) in `analyses-data/`; listed and reopened without re-downloading | ✅ Working locally; on EC2 the folder is on the instance's EBS volume |
-| 4 | Storage: RM notes | Structured meeting note saved with, and linked to, its briefing | ✅ Working locally |
-| 5 | Database search | Metadata in SQL tables; search by ticker, date range, client reference, analysis type; open the matching briefing | ✅ Working on Amazon RDS for MySQL in the Sandbox (verified 25 Oct 2026); SQLite locally |
-| 6 | Scaling | Automatically add and remove capacity | ⏳ Not started (taught in Week 9) |
+| 1 | Unified UI | One app combining financials, news and price/ratings; numbers formatted ($416.16B, 12.3%); news shows publisher, date, source link and the summary when Yahoo provides one; companies found by name or ticker | ✅ Working (news summaries depend on Yahoo; see limitations) |
+| 2 | Company comparison | 2–6 companies: share prices side by side; revenue growth, net and operating margin, debt-to-equity, and their trends over the reported fiscal years; plus ROA, debt-to-assets, P/E, market cap | ✅ Working |
+| 3 | Storage: save analysis | The complete discussion snapshot is saved: in the database (to reopen it) and as a Markdown file in `analyses-data/` (EBS on AWS) | ✅ Working |
+| 4 | Storage: RM notes | Discussion snapshot with **Client ID, tickers, discussion date, stock price at the time, client's interests**, plus notes and follow-up actions | ✅ Working |
+| 5 | Database search | `clients`, `discussions`, `discussion_companies` in SQL; search by client, company (ticker or name) and date; reopen the matching discussion | ✅ Working locally (SQLite) and tested on MySQL-compatible MariaDB. ⏳ Instructor's step 12 on Amazon RDS: next deployment |
+| 6 | Scaling | Automatically add and remove capacity | ⏳ After the Week 9 lesson. Reopening already works from any app server (snapshot stored in the database) |
 
 | Marking area | Where to look |
 |---|---|
-| Repo completeness | This README, `requirements.txt`, `.gitignore`, `.env.example`, `tests/`, `scripts/` |
-| Features & functionality | Table above; acceptance test in `tests/test_app_workflow.py` |
-| Cloud hosting | [Deploying to AWS](#deploying-to-aws) |
+| Repo completeness | This README, `requirements.txt`, `.gitignore`, `.env.example`, `tests/`, `scripts/`, `docs/` |
+| Features & functionality | Table above; the instructor's acceptance test in `tests/test_app_workflow.py` |
+| Cloud hosting | [Deploying to AWS](#deploying-to-aws), [`docs/aws-deployment.md`](docs/aws-deployment.md), [`docs/evidence/`](docs/evidence/) |
 
 ---
 
@@ -125,30 +136,32 @@ criteria are from the Lesson 5 slides.
 ```mermaid
 flowchart LR
     RM([RM in a browser]) --> UI[src/app.py<br/>Streamlit UI]
-    UI -->|tickers, period| B[services/briefing_builder.py]
+    UI -->|client, tickers, period| B[services/briefing_builder.py]
     B -->|cached 15 min| Y[services/yahoo.py] --> YF[(Yahoo Finance<br/>via yfinance)]
-    B --> A[analytics/<br/>ratios, performance]
-    UI -->|Save briefing + note| S[storage/briefing_store.py]
-    S --> F[(analyses-data/<br/>.md + .json files<br/>EBS on AWS)]
-    S --> D[(SQL metadata<br/>SQLite locally<br/>RDS MySQL on AWS)]
-    UI -->|Search history| D
-    UI -->|Open briefing| F
+    B --> A[analytics/<br/>ratios, trends, performance]
+    UI -->|Save discussion| S[storage/briefing_store.py]
+    S --> F[(analyses-data/<br/>Markdown copy<br/>EBS on AWS)]
+    S --> D[(clients · discussions ·<br/>discussion_companies<br/>SQLite locally, RDS MySQL on AWS)]
+    UI -->|Search by client / company / date| D
+    UI -->|Open discussion| D
 ```
 
 **Generate.** `briefing_builder` fetches prices and company data per ticker.
 Results are cached for 15 minutes, so changing other widgets never calls
 Yahoo again. If one ticker fails it is reported, and the others continue.
 
-**Compare.** `analytics/` computes normalized measures. Missing inputs give
-N/A, never zero.
+**Compare.** `analytics/` computes the normalized measures and their yearly
+trends. Missing inputs give N/A, never zero.
 
-**Save.** The briefing and note are written first to two files, then to the
-database in one transaction. If the database write fails, the files are
-removed, so file storage and database never disagree. Saving the same
-briefing twice is refused.
+**Save.** The Markdown file is written first, then one database transaction
+inserts the client (if new), the discussion (with the full snapshot as JSON)
+and one row per company with the values observed at that moment. If the
+database write fails, the file is removed, so the two never disagree. Saving
+the same discussion twice is refused.
 
-**Search and reopen.** SQL queries on the metadata find the briefing. The app
-then reads its JSON snapshot. Reopening never contacts Yahoo.
+**Search and reopen.** SQL queries find discussions by client, company or
+date. Reopening reads the snapshot from the database (so it works on any app
+server) and never contacts Yahoo.
 
 ---
 
@@ -159,23 +172,23 @@ then reads its JSON snapshot. Reopening never contacts Yahoo.
 ├── src/
 │   ├── app.py                    # Streamlit UI: the only entry point
 │   ├── config.py                 # settings read from environment variables
-│   ├── models/briefing.py        # Briefing, CompanySnapshot, NewsItem, RmNote
+│   ├── models/briefing.py        # Briefing (one comparison), CompanySnapshot, NewsItem, RmNote (the discussion note)
 │   ├── services/
 │   │   ├── yahoo.py              # all yfinance calls and parsing (from the notebooks)
 │   │   ├── company_lookup.py     # resolve_company(): names/tickers -> ranked matches
 │   │   └── briefing_builder.py   # combines several companies into one briefing
 │   ├── ui/
 │   │   ├── theme.py              # design system: palette, CSS, chips, section titles
-│   │   ├── charts.py             # Altair: rebased share prices, analyst ratings bar
-│   │   └── tables.py             # comparison table styling, analyst/earnings tables, ⚠ flags
+│   │   ├── charts.py             # Altair: rebased share prices, ratio trends, analyst ratings bar
+│   │   └── tables.py             # comparison and trend tables, analyst/earnings tables, ⚠ flags
 │   ├── analytics/
-│   │   ├── ratios.py             # growth rates and financial ratios
+│   │   ├── ratios.py             # growth, margins, debt-to-equity and their yearly trends
 │   │   ├── performance.py        # rebased prices, holding-period return
 │   │   └── formatting.py         # $M/$B, percentages, N/A
 │   └── storage/
-│       ├── snapshots.py          # Markdown + JSON files in analyses-data/
-│       ├── database.py           # SQL schema, insert, search (SQLite or RDS)
-│       └── briefing_store.py     # save once / reopen, keeping files and DB in step
+│       ├── snapshots.py          # Markdown copy in analyses-data/; snapshot JSON (de)serialisation
+│       ├── database.py           # clients / discussions / discussion_companies: insert, search (SQLite or RDS)
+│       └── briefing_store.py     # save a discussion once / reopen it, keeping file and DB in step
 ├── tests/                        # pytest: calculations, parsing, storage, full UI workflow
 ├── notebooks/                    # original notebooks (unchanged)
 ├── scripts/                      # nimbus-stack.yaml (deployment), check_database.py, debug_news.py, make_architecture_diagram.py, lesson templates
@@ -213,6 +226,9 @@ gives none, the app says so.
 | Revenue growth | Revenue(FY) ÷ Revenue(FY−1) − 1 |
 | Net income growth | Net income(FY) ÷ Net income(FY−1) − 1; N/A if FY−1 is zero or negative |
 | Net profit margin | Net income(FY) ÷ Revenue(FY) |
+| Operating margin | Operating income(FY) ÷ Revenue(FY) |
+| Debt-to-equity | Total debt ÷ Shareholders' equity at FY year-end, shown as a multiple (0.45x); **N/M** (not meaningful) when equity is zero or negative |
+| Trends over time | The same revenue growth, net margin and debt-to-equity for every fiscal year Yahoo reports (usually four; growth needs the year before) |
 | Return on assets | Net income(FY) ÷ Total assets at FY year-end |
 | Debt-to-assets | Total debt ÷ Total assets at FY year-end |
 | P/E (trailing), market cap | As reported by Yahoo at retrieval time; a negative P/E shows N/A |
@@ -232,36 +248,86 @@ gives none, the app says so.
 
 ## Storage and database design
 
-This follows the course design:
-- **Lesson 7:** save the analysis as a Markdown file on disk, which is EBS on AWS.
-- **Lesson 8:** save metadata about each file in a database and search it with SQL instead of guessing filenames.
+This follows the instructor's feedback (27 Oct 2026), building on the course
+design (Lesson 7: save the analysis as a file on disk, which is EBS on AWS;
+Lesson 8: store data about it in a database and search with SQL).
 
-**Files** (`analyses-data/`, excluded from Git):
-- `AAPL-MSFT__company-briefing__20261024T130501Z__1a2b3c4d.md`: readable briefing, downloadable from the app.
-- The matching `.json` file: the exact snapshot used to reopen the briefing.
+**Tables** (created automatically on first run):
 
-**Tables:**
-
-| Table | Columns | Purpose |
-|---|---|---|
-| `briefings` | `briefing_id` (PK, UUID), `created_at`, `saved_at`, `analysis_date`, `analysis_type`, `analysis_period`, `client_reference`, `tickers`, `filename`, `json_filename`, `schema_version`, `app_version` | One row per saved briefing |
-| `briefing_tickers` | `id` (PK), `briefing_id` (FK), `ticker` | One row per company in a briefing |
-| `rm_notes` | `note_id` (PK), `briefing_id` (FK, unique), `meeting_date`, `next_review_date`, `discussion_summary`, `client_priorities`, `follow_up_actions`, `free_text`, `created_at` | The RM's meeting note |
-
-Joining `briefings` and `briefing_tickers` gives the Lesson 8 example table
-(`ticker`, `analysis_type`, `date`, `filename`). For example, every briefing
-that includes Micron:
-
-```sql
-SELECT b.saved_at, b.tickers, b.client_reference, b.filename
-FROM briefings b
-WHERE b.briefing_id IN (SELECT briefing_id FROM briefing_tickers WHERE ticker = 'MU')
-ORDER BY b.saved_at DESC;
+```mermaid
+erDiagram
+    clients ||--o{ discussions : "has"
+    discussions ||--|{ discussion_companies : "includes"
+    clients {
+        string client_id PK "e.g. C-1001"
+        string client_name "optional"
+        datetime created_at
+    }
+    discussions {
+        string discussion_id PK "UUID"
+        string client_id FK
+        date discussion_date
+        datetime created_at "saved (UTC)"
+        datetime data_retrieved_at "Yahoo called (UTC)"
+        string comparison_period
+        string tickers
+        text client_interests "required"
+        text notes
+        text follow_up_actions
+        date next_review_date
+        text other_notes
+        string filename "Markdown copy on disk / EBS"
+        mediumtext snapshot_json "full snapshot to reopen"
+    }
+    discussion_companies {
+        string discussion_id PK,FK
+        string ticker PK
+        string company_name
+        double stock_price "close at the discussion"
+        date price_date "observation date"
+        string currency
+        double revenue_growth
+        double net_margin
+        double operating_margin
+        double debt_to_equity
+        date fiscal_year_end
+        string source
+        datetime retrieved_at
+    }
 ```
 
-Tables are created automatically on first run. The code uses SQLAlchemy, so
-the same queries run on SQLite locally and on Amazon RDS for MySQL on AWS;
-only `NIMBUS_DATABASE_URL` changes.
+- **One client has many discussions; one discussion includes many companies.**
+- **Each company row keeps the values observed at the time** (stock price, its
+  date, revenue growth, margins, debt-to-equity, source, retrieval time), so a
+  reopened discussion never shows today's numbers as history.
+- **`snapshot_json`** stores the complete comparison (charts, statements,
+  news). Reopening reads it from the database, so it works on any app server.
+  That is needed once several servers run behind a load balancer (Feature 6).
+- **Files** (`analyses-data/`, excluded from Git): a readable Markdown copy of
+  each discussion, e.g. `C-1001__AAPL-MSFT__20261027T130501Z__1a2b3c4d.md`,
+  downloadable from the app. If a server does not have the file, the app
+  rebuilds the same text from the stored snapshot.
+- Numbers are stored as `DOUBLE`: MySQL's `FLOAT` keeps only about 7 digits,
+  so a saved value would not read back exactly.
+
+Example searches:
+
+```sql
+-- every discussion with client C-1001, newest first
+SELECT d.discussion_date, d.tickers, d.client_interests
+FROM discussions d
+WHERE d.client_id = 'C-1001'
+ORDER BY d.discussion_date DESC;
+
+-- every discussion that included NVIDIA, with the price at the time
+SELECT d.discussion_date, d.client_id, c.stock_price, c.price_date
+FROM discussions d JOIN discussion_companies c ON c.discussion_id = d.discussion_id
+WHERE c.ticker = 'NVDA' OR LOWER(c.company_name) LIKE '%nvidia%'
+ORDER BY d.discussion_date DESC;
+```
+
+The code uses SQLAlchemy, so the same queries run on SQLite locally and on
+Amazon RDS for MySQL on AWS; only `NIMBUS_DATABASE_URL` changes.
 
 ---
 
@@ -272,9 +338,9 @@ nothing set, it uses `analyses-data/` and a SQLite file inside it.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `NIMBUS_DATA_DIR` | `<repo>/analyses-data` | Where briefing files are written |
-| `NIMBUS_DATABASE_URL` | `sqlite:///<repo>/analyses-data/nimbus.db` | Metadata database; for RDS: `mysql+pymysql://<user>:<password>@<endpoint>:3306/<db>` |
-| `NIMBUS_TIMEZONE` | `Asia/Singapore` | Time zone for displayed times and for the "Saved from / to" search dates. Times are stored in UTC. |
+| `NIMBUS_DATA_DIR` | `<repo>/analyses-data` | Where the Markdown copies are written |
+| `NIMBUS_DATABASE_URL` | `sqlite:///<repo>/analyses-data/nimbus.db` | Discussion database; for RDS: `mysql+pymysql://<user>:<password>@<endpoint>:3306/<db>` |
+| `NIMBUS_TIMEZONE` | `Asia/Singapore` | Time zone for displayed times and for the default discussion date. Times are stored in UTC. |
 
 Never commit real credentials. `.env` files are ignored by Git.
 
@@ -291,15 +357,18 @@ python -m pytest
 ```
 
 They cover:
-- formatting, ratio and return calculations, including N/A cases;
+- formatting, ratio, trend and return calculations, including N/A and N/M cases;
 - news and statement parsing;
-- saving exactly once;
-- rollback when the database fails;
-- search filters;
-- reopening without calling Yahoo;
-- `tests/test_app_workflow.py`, which drives the real Streamlit app through
-  the full acceptance workflow: generate → compare → note → save → search →
-  reopen → restart → reopen → invalid ticker;
+- saving a discussion exactly once, with every company's values at the time;
+- rollback when the database fails; invalid client IDs and missing interests rejected;
+- search by client, company (ticker or name) and date;
+- reopening from the database without calling Yahoo, even without the file;
+- `tests/test_app_workflow.py::test_instructor_acceptance_test`, which drives
+  the real Streamlit app through the instructor's acceptance test, steps 1–11:
+  client → two tickers → generate → prices side by side → revenue growth,
+  margin and debt-to-equity → client's interests → save → search by client and
+  reopen → search by ticker and reopen → reopened values equal the saved ones →
+  restart and retrieve again. Step 12 is the same on Amazon RDS (see below);
 - `tests/test_qa_regressions.py`, one test per defect found in the QA run on
   the AWS deployment (see [QA findings](#qa-findings-25-oct-2026)). Each was
   checked to fail on the code before the fix.
@@ -312,7 +381,7 @@ each test):
 NIMBUS_TEST_DATABASE_URL='mysql+pymysql://<user>:<password>@127.0.0.1:3306/nimbus_test' python -m pytest
 ```
 
-All 104 tests pass on MariaDB 10.11 (MySQL-compatible) through PyMySQL.
+All 116 tests pass on MariaDB 10.11 (MySQL-compatible) through PyMySQL.
 `python scripts/check_database.py` checks that the configured database is
 reachable and its tables exist, printing only the host and row counts, never
 the password.
@@ -338,11 +407,15 @@ many articles Nimbus could read.
 2. In Find companies type `nvid` and press Enter: NVIDIA (NVDA) · NASDAQ is
    offered; add it. Then type `Apple, Microsoft` and press Enter. Check the
    list shows names, tickers and exchanges, then generate.
-3. Check the chart, comparison table and formatted financials.
+3. Check the price chart, the comparison table (including debt-to-equity),
+   the trend charts and the formatted financials.
 4. Check that news shows links, publishers and dates.
-5. Enter a note and save. The save button disappears and the filename is shown.
-6. In Briefing history, the caption shows 1 briefing, 2 ticker records and 1 RM note.
-7. Search `MSFT`, then open the briefing. It shows the snapshot banner and your note.
+5. Choose **➕ New client**, enter Client ID `C-1001`, write the client's
+   interests in **📝 Discussion** and save. "This discussion snapshot was saved" appears.
+6. In **🗂️ History**, the caption shows 1 client, 1 discussion and 3 company records.
+7. Filter by client `C-1001`, open the discussion: the snapshot banner, your
+   note and the values at the time of the discussion are shown. Then search
+   company `nvidia` and open it again.
 8. Stop the app (Ctrl+C), start it again, then search and open again.
 9. Generate `AAPL, ZZZZ, MSFT`. ZZZZ is reported and the others still load.
 
@@ -368,7 +441,8 @@ In short:
 | Stage | What it adds | Status |
 |---|---|---|
 | 1 | VPC with public and private subnets, security group, EC2 installed by user data and run as a systemd service | ✅ Deployed in the Sandbox (`CREATE_COMPLETE`, app reachable) |
-| 2 | Amazon RDS for MySQL in the private subnets, reachable only from the app server | ✅ Deployed and verified in the Sandbox (25 and 27 Oct 2026), including a reboot. [Evidence](docs/evidence/2026-10-27-stage2/README.md) |
+| 2 | Amazon RDS for MySQL in the private subnets, reachable only from the app server | ✅ Deployed and verified in the Sandbox (25 and 27 Oct 2026), including a reboot. [Evidence](docs/evidence/2026-10-27-stage2/README.md). The template does not change for v0.10.0: the app creates the new tables on first start |
+| 2b | Instructor's acceptance test step 12: steps 1–11 on Amazon RDS with v0.10.0 | ⏳ Next deployment |
 | 3 | Scaling (Week 9 lesson) | Not started |
 
 `scripts/lesson5.yaml` and `scripts/lesson5-nimbus.yaml` are the course's
@@ -426,17 +500,26 @@ QA run 2 (27 Oct 2026) passed every other check, including the reboot test:
   the time of retrieval; earnings dates can move, and coverage is thinner for
   non-US listings (shown as N/A). Nimbus shows them for context and makes no
   recommendation of its own.
-- **Saved articles** are stored in the briefing's snapshot files (Markdown and
-  JSON), not as separate database rows.
+- **Saved articles** are stored in the discussion's snapshot (database JSON and
+  Markdown copy), not as separate database rows.
 - **Unusual values are flagged, not changed.** A trailing P/E above 100x or an
   EPS surprise above ±100% is shown as reported with a ⚠ marker, because such
   figures often reflect one-off items or depressed earnings.
 - **Layout** is capped at 1300px wide. If the page still looks narrow, check
   **⋮ → Settings → Wide mode** in the app menu (a per-browser setting).
-- **Files are local to one machine.** Briefings saved in Codespaces and on EC2
-  are separate. With auto scaling (several EC2 instances), a briefing saved on
-  one instance's disk would not be readable from another. The storage design
-  must be revisited for Feature 6.
+- **Markdown copies are local to one machine.** Each app server keeps the
+  Markdown copies it wrote. Reopening does not depend on them (the snapshot is
+  in the database, and the download is rebuilt from it when the file is
+  missing), so this does not block scaling.
+- **Debt-to-equity is not comparable across industries.** Banks (e.g. DBS,
+  OCBC, UOB) carry far more debt by design than technology companies.
+  Industry-specific comparison templates were judged an advanced feature and
+  deferred.
+- **Earlier saved briefings are not migrated.** v0.10.0 replaced the
+  `briefings` / `briefing_tickers` / `rm_notes` tables with the client-discussion
+  tables. Test briefings saved by earlier versions are not listed.
+- **Client IDs are typed by the RM.** There is no link to a client master
+  database, and no check beyond the format (1–32 letters, digits, - or _).
 - **Database password handling.** The RDS password is a `NoEcho` CloudFormation
   parameter. On the instance it is kept in `/etc/nimbus.env` (readable by root
   only) and setup logging is switched off before it is written. It is still
@@ -446,9 +529,8 @@ QA run 2 (27 Oct 2026) passed every other check, including the reboot test:
 - **Sandbox database settings:** single-AZ, 20 GB, no automated backups, and
   deleted together with the stack. These keep the Sandbox cost and creation
   time low; production would use Multi-AZ and backups.
-- **No user accounts:** everyone using an instance sees the same history.
-- **Analysis type** is always `company_briefing` in this version; the filter
-  exists so other analysis types can be added later.
+- **No user accounts:** everyone using an instance sees the same clients and
+  history.
 - **Company search** runs when you press Enter, not on every keystroke
   (true as-you-type search would need a third-party Streamlit component and a
   Yahoo call per key press). Results are cached for a day.

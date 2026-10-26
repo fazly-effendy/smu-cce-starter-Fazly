@@ -1,24 +1,29 @@
-"""Briefing metadata and RM notes in a SQL database (Feature 5).
+"""Client-discussion records in a SQL database (Features 3, 4 and 5).
 
-Lesson 8 design: the briefing file stays on disk (EBS on AWS); the database
-stores metadata about each file so users search the metadata with SQL instead
-of guessing filenames. Locally this is SQLite; on AWS the same code points at
-Amazon RDS for MySQL by changing NIMBUS_DATABASE_URL only.
+Design (instructor feedback, 27 Oct 2026, building on Lesson 8): every saved
+client discussion is stored in the database: the client, the discussion and,
+for each company discussed, the values observed at that time. Users search by
+client, by company and by date. Locally this is SQLite; on AWS the same code
+uses Amazon RDS for MySQL. Only NIMBUS_DATABASE_URL changes.
 
 Tables
 ------
-briefings         one row per saved briefing: when, analysis type, period,
-                  client reference, and the snapshot filenames
-briefing_tickers  one row per ticker in a briefing (lets SQL find every
-                  briefing that includes, say, MU)
-rm_notes          the RM note, linked to its briefing by briefing_id
+clients               one row per client (client_id typed by the RM, optional name)
+discussions           one row per saved discussion; one client has many discussions.
+                      Holds the RM's notes and the complete snapshot (JSON) used to
+                      reopen it, so any app server can reopen any discussion.
+discussion_companies  one row per company in a discussion; one discussion has many
+                      companies. Each row keeps the stock price and ratios as they were
+                      at the time of the discussion.
 
-The lesson's example table (ticker, analysis_type, date, filename) is the
-join of briefings and briefing_tickers.
+The readable Markdown copy of each discussion is also written to disk (EBS on
+AWS, Lesson 7); its filename is stored in discussions.filename.
 """
 
 from __future__ import annotations
 
+import json
+import re
 from datetime import date, datetime
 from typing import Dict, List, Optional
 
@@ -26,18 +31,21 @@ from sqlalchemy import (
     Column,
     Date,
     DateTime,
+    Double,
     ForeignKey,
     Integer,
     MetaData,
+    PrimaryKeyConstraint,
     String,
     Table,
     Text,
-    UniqueConstraint,
     create_engine,
     event,
     func,
+    or_,
     select,
 )
+from sqlalchemy.dialects import mysql
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -46,55 +54,60 @@ from models.briefing import Briefing
 
 metadata = MetaData()
 
-briefings = Table(
-    "briefings",
+# Snapshots are typically 50-200 KB: MySQL's TEXT holds only 64 KB, MEDIUMTEXT 16 MB.
+# Numbers use DOUBLE: MySQL's FLOAT is single precision (about 7 digits), so a saved price
+# or ratio would not read back exactly as saved.
+LongText = Text().with_variant(mysql.MEDIUMTEXT(), "mysql")
+
+CLIENT_ID_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,31}$")
+
+clients = Table(
+    "clients",
     metadata,
-    Column("briefing_id", String(36), primary_key=True),
-    Column("created_at", DateTime, nullable=False),  # when the data was retrieved (UTC)
-    Column("saved_at", DateTime, nullable=False),  # when the user saved it (UTC)
-    Column("analysis_date", Date, nullable=False, index=True),  # local save date (NIMBUS_TIMEZONE), for search
-    Column("analysis_type", String(32), nullable=False, index=True),
-    Column("analysis_period", String(32), nullable=False),
-    Column("client_reference", String(200), nullable=True, index=True),
+    Column("client_id", String(32), primary_key=True),
+    Column("client_name", String(200), nullable=True),
+    Column("created_at", DateTime, nullable=False),
+)
+
+discussions = Table(
+    "discussions",
+    metadata,
+    Column("discussion_id", String(36), primary_key=True),
+    Column("client_id", String(32), ForeignKey("clients.client_id"), nullable=False, index=True),
+    Column("discussion_date", Date, nullable=False, index=True),  # local date of the meeting
+    Column("created_at", DateTime, nullable=False),  # when it was saved (UTC)
+    Column("data_retrieved_at", DateTime, nullable=False),  # when Yahoo was called (UTC)
+    Column("comparison_period", String(32), nullable=False),  # e.g. "1 year"
     Column("tickers", String(255), nullable=False),  # display copy, e.g. "AAPL, MSFT"
-    Column("filename", String(255), nullable=False),  # Markdown file in analyses-data/
-    Column("json_filename", String(255), nullable=False),  # JSON snapshot used to reopen
+    Column("client_interests", Text, nullable=False),
+    Column("notes", Text, nullable=True),  # discussion summary
+    Column("follow_up_actions", Text, nullable=True),
+    Column("next_review_date", Date, nullable=True),
+    Column("other_notes", Text, nullable=True),
+    Column("filename", String(255), nullable=False),  # Markdown copy on disk / EBS
+    Column("snapshot_json", LongText, nullable=False),  # complete snapshot used to reopen
     Column("schema_version", Integer, nullable=False),
     Column("app_version", String(16), nullable=False),
 )
 
-briefing_tickers = Table(
-    "briefing_tickers",
+discussion_companies = Table(
+    "discussion_companies",
     metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column(
-        "briefing_id",
-        String(36),
-        ForeignKey("briefings.briefing_id", ondelete="CASCADE"),
-        nullable=False,
-    ),
+    Column("discussion_id", String(36), ForeignKey("discussions.discussion_id", ondelete="CASCADE"),
+           nullable=False),
     Column("ticker", String(16), nullable=False, index=True),
-    UniqueConstraint("briefing_id", "ticker", name="uq_briefing_ticker"),
-)
-
-rm_notes = Table(
-    "rm_notes",
-    metadata,
-    Column("note_id", Integer, primary_key=True, autoincrement=True),
-    Column(
-        "briefing_id",
-        String(36),
-        ForeignKey("briefings.briefing_id", ondelete="CASCADE"),
-        nullable=False,
-        unique=True,
-    ),
-    Column("meeting_date", Date, nullable=True),
-    Column("next_review_date", Date, nullable=True),
-    Column("discussion_summary", Text, nullable=True),
-    Column("client_priorities", Text, nullable=True),
-    Column("follow_up_actions", Text, nullable=True),
-    Column("free_text", Text, nullable=True),
-    Column("created_at", DateTime, nullable=False),
+    Column("company_name", String(200), nullable=True, index=True),
+    Column("stock_price", Double, nullable=True),  # last close at the time of the discussion
+    Column("price_date", Date, nullable=True),  # date of that close (observation date)
+    Column("currency", String(8), nullable=True),
+    Column("revenue_growth", Double, nullable=True),  # fractions: 0.12 = 12%
+    Column("net_margin", Double, nullable=True),
+    Column("operating_margin", Double, nullable=True),
+    Column("debt_to_equity", Double, nullable=True),  # multiple: 0.45 = 0.45x
+    Column("fiscal_year_end", Date, nullable=True),  # year the ratios refer to
+    Column("source", String(100), nullable=False),
+    Column("retrieved_at", DateTime, nullable=False),
+    PrimaryKeyConstraint("discussion_id", "ticker", name="pk_discussion_company"),
 )
 
 _engines: Dict[str, Engine] = {}
@@ -114,118 +127,174 @@ def get_engine(url: Optional[str] = None) -> Engine:
     return _engines[url]
 
 
-def _parse_dt(value: str) -> datetime:
+def normalise_client_id(value: Optional[str]) -> str:
+    """"c-1001 " -> "C-1001". Raises ValueError if it is not a valid client ID."""
+    client_id = (value or "").strip().upper()
+    if not CLIENT_ID_PATTERN.match(client_id):
+        raise ValueError("A client ID is 1–32 letters, digits, - or _, starting with a letter or digit, "
+                         "e.g. C-1001.")
+    return client_id
+
+
+def _parse_dt(value: Optional[str]) -> Optional[datetime]:
     """ISO 8601 UTC string -> naive UTC datetime (MySQL DATETIME has no time zone)."""
+    if not value:
+        return None
     return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
 
 
 def _parse_date(value: Optional[str]) -> Optional[date]:
-    return date.fromisoformat(value) if value else None
+    return date.fromisoformat(value[:10]) if value else None
 
 
-def briefing_exists(briefing_id: str, engine: Optional[Engine] = None) -> bool:
+def discussion_exists(discussion_id: str, engine: Optional[Engine] = None) -> bool:
     engine = engine or get_engine()
     with engine.connect() as connection:
         found = connection.execute(
-            select(briefings.c.briefing_id).where(briefings.c.briefing_id == briefing_id)
+            select(discussions.c.discussion_id).where(discussions.c.discussion_id == discussion_id)
         ).first()
     return found is not None
 
 
-def insert_briefing(
-    briefing: Briefing, filename: str, json_filename: str, engine: Optional[Engine] = None
-) -> bool:
-    """Insert the briefing, its tickers and its note in one transaction.
+def _ensure_client(connection, client_id: str, client_name: Optional[str], now: datetime) -> None:
+    """Create the client on first use; fill in the name if it was not known before."""
+    row = connection.execute(select(clients).where(clients.c.client_id == client_id)).first()
+    name = (client_name or "").strip() or None
+    if row is None:
+        connection.execute(clients.insert().values(client_id=client_id, client_name=name, created_at=now))
+    elif name and not row.client_name:
+        connection.execute(clients.update().where(clients.c.client_id == client_id).values(client_name=name))
 
-    Returns False (and changes nothing) if this briefing_id is already saved,
-    which makes saving safe to repeat.
+
+def insert_discussion(briefing: Briefing, filename: str, engine: Optional[Engine] = None) -> bool:
+    """Insert the client (if new), the discussion and one row per company, in one transaction.
+
+    Returns False (and changes nothing) if this discussion is already saved, which makes
+    saving safe to repeat. The briefing must carry its note (client ID, date, interests).
     """
     engine = engine or get_engine()
     note = briefing.note
+    if note is None:
+        raise ValueError("A discussion needs its note (client ID, discussion date, client interests).")
+    client_id = normalise_client_id(note.client_id)
+    if not (note.client_interests or "").strip():
+        raise ValueError("Notes about the client's interests are required.")
+    saved_at = _parse_dt(briefing.saved_at or briefing.created_at)
+    retrieved = [c.retrieved_at for c in briefing.companies if c.retrieved_at] or [briefing.created_at]
     try:
         with engine.begin() as connection:  # commits on success, rolls back on any error
-            connection.execute(
-                briefings.insert().values(
-                    briefing_id=briefing.briefing_id,
-                    created_at=_parse_dt(briefing.created_at),
-                    saved_at=_parse_dt(briefing.saved_at or briefing.created_at),
-                    analysis_date=to_local(_parse_dt(briefing.saved_at or briefing.created_at)).date(),
-                    analysis_type=briefing.analysis_type,
-                    analysis_period=briefing.analysis_period,
-                    client_reference=(note.client_reference.strip() if note and note.client_reference else None),
-                    tickers=", ".join(briefing.successful_tickers)[:255],
-                    filename=filename,
-                    json_filename=json_filename,
-                    schema_version=briefing.schema_version,
-                    app_version=briefing.app_version,
-                )
-            )
-            connection.execute(
-                briefing_tickers.insert(),
-                [{"briefing_id": briefing.briefing_id, "ticker": t} for t in briefing.successful_tickers],
-            )
-            if note:
-                connection.execute(
-                    rm_notes.insert().values(
-                        briefing_id=briefing.briefing_id,
-                        meeting_date=_parse_date(note.meeting_date),
-                        next_review_date=_parse_date(note.next_review_date),
-                        discussion_summary=note.discussion_summary,
-                        client_priorities=note.client_priorities,
-                        follow_up_actions=note.follow_up_actions,
-                        free_text=note.free_text,
-                        created_at=_parse_dt(note.created_at),
-                    )
-                )
+            _ensure_client(connection, client_id, note.client_name, saved_at)
+            connection.execute(discussions.insert().values(
+                discussion_id=briefing.briefing_id,
+                client_id=client_id,
+                discussion_date=_parse_date(note.discussion_date) or to_local(saved_at).date(),
+                created_at=saved_at,
+                data_retrieved_at=_parse_dt(min(retrieved)),
+                comparison_period=briefing.analysis_period,
+                tickers=", ".join(briefing.successful_tickers)[:255],
+                client_interests=note.client_interests.strip(),
+                notes=(note.notes or "").strip() or None,
+                follow_up_actions=(note.follow_up_actions or "").strip() or None,
+                next_review_date=_parse_date(note.next_review_date),
+                other_notes=(note.free_text or "").strip() or None,
+                filename=filename,
+                snapshot_json=json.dumps(briefing.to_dict(), ensure_ascii=False),
+                schema_version=briefing.schema_version,
+                app_version=briefing.app_version,
+            ))
+            connection.execute(discussion_companies.insert(), [
+                {
+                    "discussion_id": briefing.briefing_id,
+                    "ticker": c.ticker,
+                    "company_name": (c.name or c.ticker)[:200],
+                    "stock_price": c.last_close,
+                    "price_date": _parse_date(c.last_close_date),
+                    "currency": c.currency,
+                    "revenue_growth": c.ratios.get("revenue_growth"),
+                    "net_margin": c.ratios.get("net_margin"),
+                    "operating_margin": c.ratios.get("operating_margin"),
+                    "debt_to_equity": c.ratios.get("debt_to_equity"),
+                    "fiscal_year_end": _parse_date(c.fiscal_year_end),
+                    "source": c.source_name[:100],
+                    "retrieved_at": _parse_dt(c.retrieved_at),
+                }
+                for c in briefing.companies
+            ])
     except IntegrityError:
-        if briefing_exists(briefing.briefing_id, engine):
+        if discussion_exists(briefing.briefing_id, engine):
             return False
         raise
     return True
 
 
-def search_briefings(
-    ticker: Optional[str] = None,
+def search_discussions(
+    client_id: Optional[str] = None,
+    company: Optional[str] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
-    client_reference: Optional[str] = None,
-    analysis_type: Optional[str] = None,
     limit: int = 200,
     engine: Optional[Engine] = None,
 ) -> List[dict]:
-    """Find saved briefings by metadata, newest first.
+    """Find saved discussions by client, company (ticker or name) and discussion date, newest first.
 
-    Equivalent SQL for a ticker search:
-        SELECT b.* FROM briefings b
-        WHERE b.briefing_id IN (SELECT briefing_id FROM briefing_tickers WHERE ticker = 'MU')
-        ORDER BY b.saved_at DESC;
+    Equivalent SQL for "every discussion with client C-1001 that included NVIDIA":
+        SELECT d.*, c.client_name FROM discussions d JOIN clients c ON c.client_id = d.client_id
+        WHERE d.client_id = 'C-1001'
+          AND d.discussion_id IN (SELECT discussion_id FROM discussion_companies
+                                  WHERE ticker = 'NVIDIA' OR LOWER(company_name) LIKE '%nvidia%')
+        ORDER BY d.discussion_date DESC, d.created_at DESC;
     """
     engine = engine or get_engine()
-    query = select(briefings)
-    if ticker and ticker.strip():
-        matching = select(briefing_tickers.c.briefing_id).where(
-            briefing_tickers.c.ticker == ticker.strip().upper()
-        )
-        query = query.where(briefings.c.briefing_id.in_(matching))
+    columns = [c for c in discussions.c if c.name != "snapshot_json"]  # the snapshot is only loaded to reopen
+    query = select(*columns, clients.c.client_name).join(clients, clients.c.client_id == discussions.c.client_id)
+    if client_id and client_id.strip():
+        query = query.where(discussions.c.client_id == client_id.strip().upper())
+    if company and company.strip():
+        text = company.strip()
+        matching = select(discussion_companies.c.discussion_id).where(or_(
+            discussion_companies.c.ticker == text.upper(),
+            func.lower(discussion_companies.c.company_name).like(f"%{text.lower()}%"),
+        ))
+        query = query.where(discussions.c.discussion_id.in_(matching))
     if date_from:
-        query = query.where(briefings.c.analysis_date >= date_from)
+        query = query.where(discussions.c.discussion_date >= date_from)
     if date_to:
-        query = query.where(briefings.c.analysis_date <= date_to)
-    if client_reference and client_reference.strip():
-        pattern = f"%{client_reference.strip().lower()}%"
-        query = query.where(func.lower(briefings.c.client_reference).like(pattern))
-    if analysis_type:
-        query = query.where(briefings.c.analysis_type == analysis_type)
-    query = query.order_by(briefings.c.saved_at.desc()).limit(limit)
+        query = query.where(discussions.c.discussion_date <= date_to)
+    query = query.order_by(discussions.c.discussion_date.desc(), discussions.c.created_at.desc()).limit(limit)
     with engine.connect() as connection:
         return [dict(row._mapping) for row in connection.execute(query)]
 
 
-def get_note(briefing_id: str, engine: Optional[Engine] = None) -> Optional[dict]:
+def get_discussion(discussion_id: str, engine: Optional[Engine] = None) -> Optional[dict]:
+    """The discussion row (including snapshot_json) with the client's name, or None."""
     engine = engine or get_engine()
+    query = (select(discussions, clients.c.client_name)
+             .join(clients, clients.c.client_id == discussions.c.client_id)
+             .where(discussions.c.discussion_id == discussion_id))
     with engine.connect() as connection:
-        row = connection.execute(select(rm_notes).where(rm_notes.c.briefing_id == briefing_id)).first()
+        row = connection.execute(query).first()
     return dict(row._mapping) if row else None
+
+
+def get_companies(discussion_id: str, engine: Optional[Engine] = None) -> List[dict]:
+    """The per-company rows saved with a discussion (values at the time of the discussion)."""
+    engine = engine or get_engine()
+    query = (select(discussion_companies).where(discussion_companies.c.discussion_id == discussion_id)
+             .order_by(discussion_companies.c.ticker))
+    with engine.connect() as connection:
+        return [dict(row._mapping) for row in connection.execute(query)]
+
+
+def list_clients(engine: Optional[Engine] = None) -> List[dict]:
+    """Every client, with the number of saved discussions, alphabetical by ID."""
+    engine = engine or get_engine()
+    query = (select(clients.c.client_id, clients.c.client_name,
+                    func.count(discussions.c.discussion_id).label("discussions"))
+             .select_from(clients.outerjoin(discussions, discussions.c.client_id == clients.c.client_id))
+             .group_by(clients.c.client_id, clients.c.client_name)
+             .order_by(clients.c.client_id))
+    with engine.connect() as connection:
+        return [dict(row._mapping) for row in connection.execute(query)]
 
 
 def count_rows(engine: Optional[Engine] = None) -> Dict[str, int]:
@@ -234,5 +303,5 @@ def count_rows(engine: Optional[Engine] = None) -> Dict[str, int]:
     with engine.connect() as connection:
         return {
             table.name: connection.execute(select(func.count()).select_from(table)).scalar_one()
-            for table in (briefings, briefing_tickers, rm_notes)
+            for table in (clients, discussions, discussion_companies)
         }

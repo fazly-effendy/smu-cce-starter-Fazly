@@ -31,16 +31,19 @@ def test_unknown_time_zone_falls_back_to_utc(monkeypatch):
     assert format_timestamp("2026-10-24T18:21:00Z") == "24 Oct 2026, 18:21 UTC"
 
 
-def test_date_search_uses_the_local_save_date(monkeypatch):
-    """QA: saved at 02:21 on 25 Oct in Singapore (18:21 UTC on 24 Oct); searching 25 Oct found nothing."""
-    monkeypatch.setenv("NIMBUS_TIMEZONE", "Asia/Singapore")
-    briefing = make_briefing()
-    briefing.saved_at = "2026-10-24T18:21:53Z"
-    database.insert_briefing(briefing, "case-01.md", "case-01.json")
+def test_date_search_uses_the_local_date(monkeypatch):
+    """QA: saved at 02:21 on 25 Oct in Singapore (18:21 UTC on 24 Oct); searching 25 Oct found nothing.
+    Without an explicit discussion date, the local date of saving is used."""
+    from dataclasses import replace
 
-    found = database.search_briefings(date_from=date(2026, 10, 25), date_to=date(2026, 10, 25))
-    assert [row["briefing_id"] for row in found] == [briefing.briefing_id]
-    assert database.search_briefings(date_from=date(2026, 10, 24), date_to=date(2026, 10, 24)) == []
+    monkeypatch.setenv("NIMBUS_TIMEZONE", "Asia/Singapore")
+    briefing = replace(make_briefing(), saved_at="2026-10-24T18:21:53Z",
+                       note=make_note(discussion_date=None))
+    database.insert_discussion(briefing, "case-01.md")
+
+    found = database.search_discussions(date_from=date(2026, 10, 25), date_to=date(2026, 10, 25))
+    assert [row["discussion_id"] for row in found] == [briefing.briefing_id]
+    assert database.search_discussions(date_from=date(2026, 10, 24), date_to=date(2026, 10, 24)) == []
 
 
 # --- News: only articles Yahoo links to the company ------------------------------------------
@@ -97,25 +100,20 @@ def test_retrieval_time_comes_from_the_fetch_not_the_briefing():
 def test_from_date_after_to_date_is_rejected():
     app = AppTest.from_file(APP, default_timeout=60)
     app.run()
-    date_inputs = [d for d in app.date_input if d.label.startswith("Saved")]
+    date_inputs = [d for d in app.date_input if d.label.startswith("Discussion")]
     date_inputs[0].set_value(date(2026, 10, 26))
     date_inputs[1].set_value(date(2026, 10, 25))
     button(app, "Search").click().run()
     assert not app.exception, app.exception
-    assert any("after “Saved to”" in e.value for e in app.error)
+    assert any("after “Discussion to”" in e.value for e in app.error)
 
 
 def test_selector_shows_the_briefing_opened_from_the_sidebar():
     """QA: 'Choose a saved briefing' could show a different record from the one open on screen."""
     older = make_briefing(("AAPL", "MSFT"))
-    briefing_store.save_briefing(older, make_note("Older client"))
+    briefing_store.save_discussion(older, make_note("C-1001", discussion_date="2026-10-20"))
     newer = make_briefing(("MSFT",))
-    briefing_store.save_briefing(newer, make_note("Newer client"))
-    with database.get_engine().begin() as connection:  # make the order unambiguous: older first
-        for briefing, saved in ((older, datetime(2026, 10, 24, 10, 0)), (newer, datetime(2026, 10, 24, 12, 0))):
-            connection.execute(database.briefings.update()
-                               .where(database.briefings.c.briefing_id == briefing.briefing_id)
-                               .values(saved_at=saved))
+    briefing_store.save_discussion(newer, make_note("C-2002", discussion_date="2026-10-24"))
 
     app = AppTest.from_file(APP, default_timeout=60)
     app.run()
@@ -123,7 +121,7 @@ def test_selector_shows_the_briefing_opened_from_the_sidebar():
     sidebar_button.click().run()
     assert not app.exception, app.exception
 
-    chooser = next(s for s in app.selectbox if s.label == "Choose a saved briefing")
+    chooser = next(s for s in app.selectbox if s.label == "Choose a saved discussion")
     assert chooser.value == older.briefing_id
     assert app.session_state["open_briefing_id"] == older.briefing_id
 
@@ -178,19 +176,19 @@ class _FrozenDatetime(datetime):
 
 def test_invalid_date_range_shows_only_the_error():
     """QA round 2: the old results table stayed visible under the date error."""
-    briefing_store.save_briefing(make_briefing(), make_note("Acme"))
+    briefing_store.save_discussion(make_briefing(), make_note())
     app = AppTest.from_file(APP, default_timeout=60)
     app.run()
-    date_inputs = [d for d in app.date_input if d.label.startswith("Saved")]
+    date_inputs = [d for d in app.date_input if d.label.startswith("Discussion")]
     date_inputs[0].set_value(date(2026, 10, 28))
     date_inputs[1].set_value(date(2026, 10, 27))
     button(app, "Search").click().run()
-    assert any("after “Saved to”" in e.value for e in app.error)
-    assert not [s for s in app.selectbox if s.label == "Choose a saved briefing"]
+    assert any("after “Discussion to”" in e.value for e in app.error)
+    assert not [s for s in app.selectbox if s.label == "Choose a saved discussion"]
 
 
 def test_sidebar_shows_version_and_server_start_time():
     app = AppTest.from_file(APP, default_timeout=60)
     app.run()
     captions = [c.value for c in app.sidebar.caption]
-    assert any(c.startswith("Nimbus 0.9.1") and "server started" in c for c in captions), captions
+    assert any(c.startswith("Nimbus 0.10.0") and "server started" in c for c in captions), captions

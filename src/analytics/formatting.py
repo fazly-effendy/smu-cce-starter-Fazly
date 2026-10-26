@@ -48,6 +48,13 @@ def format_multiple(value: Optional[float]) -> str:
     return f"{value:,.1f}x"
 
 
+def format_times(value: Optional[float]) -> str:
+    """0.4512 -> "0.45x" (used for debt-to-equity)."""
+    if value is None:
+        return NOT_AVAILABLE
+    return f"{value:,.2f}x"
+
+
 def format_date(value: Optional[str]) -> str:
     """ISO date or date-time -> "4 Oct 2026"; unparseable input is shown as given.
 
