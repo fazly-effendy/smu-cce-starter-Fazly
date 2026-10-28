@@ -26,6 +26,15 @@ Parameters:
     Description: >
       Exact commit to deploy (e.g. e49a2c6). Leave empty to deploy the latest commit of GitBranch.
       The commit must be on GitBranch. Setup fails, and the stack shows CREATE_FAILED, if it is not found.
+  InstanceProfileName:
+    Type: String
+    Default: LabInstanceProfile
+    AllowedPattern: "^$|^[A-Za-z0-9+=,.@_-]{1,128}$"
+    ConstraintDescription: Empty, or an existing instance profile name (e.g. LabInstanceProfile).
+    Description: >
+      IAM instance profile for the app server. The AWS Academy Sandbox provides LabInstanceProfile
+      (role LabRole); Academy Sandboxes normally block creating a narrower role. Nimbus itself calls no AWS
+      APIs. Leave empty to launch the server with no IAM role.
   ImageId:
     Type: AWS::EC2::Image::Id
     Default: ami-0fef201115eefe936
@@ -76,6 +85,9 @@ Parameters:
     Type: String
     Default: "8.4"
     Description: MySQL major version. RDS picks the current minor version.
+
+Conditions:
+  HasInstanceProfile: !Not [!Equals [!Ref InstanceProfileName, ""]]
 
 Resources:
   # -------------------------------------------------------------------------
@@ -276,6 +288,8 @@ Resources:
       ImageId: !Ref ImageId
       InstanceType: !Ref InstanceType
       KeyName: !Ref KeyName
+      # IAM: the Sandbox's instance profile (see InstanceProfileName), or none.
+      IamInstanceProfile: !If [HasInstanceProfile, !Ref InstanceProfileName, !Ref "AWS::NoValue"]
       SubnetId: !Ref PublicSubnetA
       SecurityGroupIds: [!Ref AppSecurityGroup]
       Tags: [{Key: Name, Value: nimbus-app}]
@@ -382,6 +396,9 @@ Outputs:
   InstanceId:
     Description: App server instance (EC2 > Instances)
     Value: !Ref AppServer
+  InstanceProfile:
+    Description: IAM instance profile attached to the app server (EC2 > nimbus-app > Security)
+    Value: !If [HasInstanceProfile, !Ref InstanceProfileName, "none"]
   VpcId:
     Description: VPC for Nimbus
     Value: !Ref NimbusVpc

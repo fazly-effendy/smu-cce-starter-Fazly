@@ -47,6 +47,7 @@ flowchart LR
 | Database security group | `nimbus-db-sg` | Port 3306 **only from `nimbus-app-sg`**; nothing else can connect |
 | DB subnet group | `nimbus-db-subnets` | Places RDS in the two private subnets (RDS requires two AZs) |
 | RDS for MySQL (db.t3.micro, 20 GB) | `nimbus-db` | Database `nimbus`: tables `clients`, `discussions`, `discussion_companies` (created by the app on first start). **Not publicly accessible** |
+| IAM instance profile (existing, not created) | `LabInstanceProfile` (role `LabRole`) | Attached to the app server. Provided by the Sandbox; Nimbus uses no AWS credentials. See the README, *Security and access* |
 | EC2 instance (t2.micro, Amazon Linux 2023) | `nimbus-app` | Clones the repo, installs the exact versions in `requirements-lock.txt` in a venv, connects to RDS, runs Nimbus as the `nimbus` systemd service |
 
 **How "complete" is decided:** CloudFormation creates RDS first, because the
@@ -105,6 +106,9 @@ environment, not to this stack.
    - `GitCommit`: **for a recorded deployment (evidence, final demo), the exact
      commit to deploy**, e.g. `e49a2c6`, copied from `git log --oneline -1` or
      GitHub. Leave it empty to deploy the latest commit of `GitBranch`.
+   - `InstanceProfileName`: leave `LabInstanceProfile`. If the stack fails
+     because the Sandbox has no such profile or will not let you use it (see
+     *Troubleshooting*), clear it to launch the server with no IAM role.
    - Leave the others at their defaults (`DBUsername` = `nimbusadmin`).
 
 **Deploying new code:** EC2 user data runs only once, when the instance is
@@ -153,6 +157,10 @@ tab with a visible password (it shows `****`, which is fine).
    after the reboot (proof that the server really restarted), the History caption shows
    the same counts, and the discussion still opens with the same values.
 7. **VPC → Route tables → nimbus-rtb-private → Routes:** only the `local` route.
+8. **IAM:** **EC2 → nimbus-app → Security** tab: *IAM Role: LabRole* (or *–* if
+   `InstanceProfileName` was left empty), and the stack output `InstanceProfile`.
+   Then **IAM → Roles → LabRole → Trust relationships**: the trusted entity
+   includes `ec2.amazonaws.com`.
 
 Optional, for a viva question on SQL: to run SQL directly against RDS, set
 `AllowedSshCidr` to your own IP followed by `/32` when creating the stack, then
@@ -182,6 +190,7 @@ Close SSH again afterwards. This step is not needed for the demo.
 | `CREATE_FAILED` on `AppServer` (other reason) | **EC2 → nimbus-app → Actions → Monitor and troubleshoot → Get system log**; look for lines after `nimbus-setup` / `fatal` / `ERROR`. |
 | `Remote branch … not found` | The `GitBranch` parameter does not exist on GitHub; push it or use `main`. |
 | `Commit … not found in the repository` (Events reason or system log) | The `GitCommit` value is wrong or not pushed yet. Check `git log --oneline -1` and that it is on GitHub, then delete and recreate the stack. |
+| `CREATE_FAILED` on `AppServer`: *Value (LabInstanceProfile) for parameter iamInstanceProfile.name is invalid*, or *not authorized to perform: iam:PassRole* | This Sandbox has no `LabInstanceProfile`, or does not let you use it. Delete the stack and create it again with `InstanceProfileName` empty (no IAM role; Nimbus does not need one). |
 | `DBInstanceIdentifier … already exists` | A `nimbus-db` from an earlier stack is still there: wait until it is deleted, or use another stack name. |
 | History tab says *Cannot reach the briefing database* | RDS stopped or still starting (e.g. after the Sandbox was resumed). Wait until *Available*, then reload. |
 | Page does not load | Use `http://`, not `https://`; check the `nimbus-app-sg` inbound rule for 8501. |
@@ -224,6 +233,15 @@ wait for any operation in progress to finish.
 - **Sandbox-sized database:** `db.t3.micro`, 20 GB gp2, single-AZ, no automated
   backups, deleted with the stack: low cost and faster to create. Production
   would use Multi-AZ, backups and deletion protection.
+- **IAM: the Sandbox's instance profile, with nothing used from it:** the app
+  server gets `LabInstanceProfile` (role `LabRole`), the course's mechanism for
+  EC2 roles. Nimbus calls no AWS APIs: it reaches RDS with a database username
+  and password and Yahoo over HTTPS, so it never uses the role's credentials.
+  `LabRole` allows more than Nimbus needs, and Academy Sandboxes normally do
+  not let us create a narrower role, so this is a classroom limitation. In production the
+  role would be removed, or narrowed to what is used (e.g. Secrets Manager for
+  the database password). The access model for people is in the README,
+  *Security and access*.
 - **SSH closed by default:** troubleshooting uses the EC2 system log (as in
   Lesson 7). SSH can be opened to a single IP with `AllowedSshCidr`.
 - **systemd instead of `nohup`:** the app restarts if it crashes and starts

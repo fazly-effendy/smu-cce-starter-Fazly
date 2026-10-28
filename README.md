@@ -39,8 +39,10 @@ Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 9. [Testing](#testing)
 10. [Deploying to AWS](#deploying-to-aws)
 11. [QA findings (25 Oct 2026)](#qa-findings-25-oct-2026)
-12. [Known limitations](#known-limitations)
-13. [Team and contributions](#team-and-contributions)
+12. [Security and access](#security-and-access)
+13. [Known limitations](#known-limitations)
+14. [Future work](#future-work)
+15. [Team and contributions](#team-and-contributions)
 
 ---
 
@@ -506,6 +508,33 @@ defect (the save pop-up stayed open after saving) and six low ones are fixed
 in v0.10.1. The list is in the
 [step 12 evidence](docs/evidence/2026-10-29-step12/README.md#defects-found-and-fixes-in-v0101).
 
+## Security and access
+
+IAM controls who can use the **AWS account**. Relationship managers never use
+AWS: they only open the Nimbus web page, so IAM does not apply to them, and
+Nimbus has no logins of its own (see *Known limitations* and *Future work*).
+
+| Who | How they get in | What they can do | In the AWS Academy Sandbox |
+|---|---|---|---|
+| Relationship manager | The Nimbus web page only | Compare, save, search and reopen discussions. No AWS access | As designed. No app logins (a known limitation) |
+| Developer | AWS console through company single sign-on (an IAM role) | Read CloudFormation events and the EC2 system log; deploy a test stack | Not created: the Sandbox has one shared lab login, and the course does not require staff IAM accounts |
+| Administrator | AWS console through single sign-on, with multi-factor sign-in | Create and delete stacks; manage RDS, security groups and IAM | Not created: same reason |
+| App server (EC2) | Instance profile `LabInstanceProfile` (role `LabRole`) | Nothing Nimbus uses: the app reaches RDS with a database username and password, and calls no AWS APIs | **Implemented** in `scripts/nimbus-stack.yaml` (`InstanceProfileName`) |
+| Database (RDS) | No AWS identity | Accepts connections on port 3306 only from the app server's security group; no public address | **Implemented** |
+
+**Why `LabInstanceProfile`:** it is the Sandbox's ready-made role for EC2, and
+AWS Academy Sandboxes normally do not permit creating IAM roles, users or groups
+(to be confirmed in our Sandbox before the final deployment). `LabRole` can
+do more than Nimbus needs; least privilege in production would mean no role,
+or a role narrowed to what is used (for example reading the database password
+from Secrets Manager). Leaving `InstanceProfileName` empty deploys with no role,
+and Nimbus works the same.
+
+Other controls: the database is in private subnets with no internet route;
+SSH is closed by default; the database password is a `NoEcho` parameter and is
+never in the repository, the template or the logs (details in
+[docs/aws-deployment.md](docs/aws-deployment.md)).
+
 ## Known limitations
 
 - **Yahoo Finance via yfinance** is an unofficial interface. Fields can be
@@ -559,7 +588,10 @@ in v0.10.1. The list is in the
   deleted together with the stack. These keep the Sandbox cost and creation
   time low; production would use Multi-AZ and backups.
 - **No user accounts:** everyone using an instance sees the same clients and
-  history.
+  history. A design for RM logins is under *Future work*.
+- **The app server's IAM role is broader than needed.** The Sandbox's `LabRole`
+  is used because Academy Sandboxes normally do not permit creating a narrower role; Nimbus does
+  not use its credentials. See *Security and access*.
 - **Company search** runs when you press Enter, not on every keystroke
   (true as-you-type search would need a third-party Streamlit component and a
   Yahoo call per key press). Results are cached for a day.
@@ -571,6 +603,28 @@ in v0.10.1. The list is in the
 - **Windows:** keep the project outside Google Drive, OneDrive or Dropbox
   folders. Cloud-synced folders lock files and cause "Permission denied"
   errors (and can corrupt `.git`).
+
+## Future work
+
+Deliberately left out until Features 1–6 and the AWS deployment are complete
+and tested; none of it is needed for the course requirements.
+
+- **RM logins and per-RM data.** A sign-in page for each relationship manager
+  (for example three fictional RMs), so each sees only their own clients and
+  discussions. Design:
+  - a `relationship_managers` table, and an `rm_id` column on `clients` and
+    `discussions`; search filtered by the signed-in RM;
+  - passwords stored only as salted hashes (e.g. PBKDF2 from the Python
+    standard library), set at deployment from `NoEcho` CloudFormation
+    parameters, never in Git;
+  - **HTTPS first** (a load balancer with a certificate and a domain): over
+    plain HTTP, as today, passwords would be sent unencrypted;
+  - with several servers, sign-in state lives in one server's memory, so it
+    relies on the load balancer's sticky sessions;
+  - in a bank, sign-in would come from the bank's single sign-on rather than
+    passwords kept by Nimbus.
+- **Database password from AWS Secrets Manager** instead of EC2 user data,
+  using a narrowly scoped instance role.
 
 ---
 
