@@ -11,15 +11,18 @@ exactly as it was.
 
 Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 
-> **Status (v0.10.1).** Implements the instructor's feedback of 27 Oct 2026:
+> **Status (v0.10.2).** Implements the instructor's feedback of 27 Oct 2026:
 > client-discussion snapshots (Client ID, ticker, discussion date, stock price
 > at the time, client's interests) stored in `clients`, `discussions` and
-> `discussion_companies`, retrievable by client and by company. **The
-> instructor's acceptance test passes: steps 1–11 as an automated test
-> (`tests/test_app_workflow.py`), and step 12 on Amazon RDS in the AWS Sandbox
-> on 29 Oct 2026 ([evidence](docs/evidence/2026-10-29-step12/README.md)).**
-> The environment is created by CloudFormation (VPC, EC2, RDS). Auto scaling
-> (Feature 6) follows the Week 9 lesson; see [Project status](#project-status).
+> `discussion_companies`, retrievable by client and by company. The
+> instructor's acceptance test steps 1–11 pass as an automated test
+> (`tests/test_app_workflow.py`). **Step 12 (the same on Amazon RDS) passed in
+> the AWS Sandbox on 29 Oct 2026 with v0.10.0, commit `02c72aa`**
+> ([evidence](docs/evidence/2026-10-29-step12/README.md)). v0.10.1 (fixes from
+> that run) and v0.10.2 (news summaries from Yahoo's RSS feed) are tested
+> locally and not yet deployed. The environment is created by CloudFormation
+> (VPC, EC2, RDS). Auto scaling (Feature 6) follows the Week 9 lesson; see
+> [Project status](#project-status).
 
 ---
 
@@ -116,7 +119,7 @@ criteria are from the Lesson 5 slides.
 
 | # | Feature | What Nimbus does | Status |
 |---|---|---|---|
-| 1 | Unified UI | One app combining financials, news and price/ratings; numbers formatted ($416.16B, 12.3%); news shows publisher, date, source link and the summary when Yahoo provides one; companies found by name or ticker | ✅ Working (news summaries depend on Yahoo; see limitations) |
+| 1 | Unified UI | One app combining financials, news and price/ratings; numbers formatted ($416.16B, 12.3%); news shows publisher (or the feed it came from), date, source link and a summary taken from Yahoo (search article or Yahoo's RSS headline feed), never generated; companies found by name or ticker | ✅ Working locally (v0.10.2). Live check on a laptop 29 Oct 2026: Yahoo's RSS feed gave summaries for 8 of the 13 relevant search articles, plus 22 relevant RSS-only articles. ⏳ Not yet on AWS |
 | 2 | Company comparison | 2–6 companies: share prices side by side; revenue growth, net and operating margin, debt-to-equity, and their trends over the reported fiscal years; plus ROA, debt-to-assets, P/E, market cap | ✅ Working |
 | 3 | Storage: save analysis | The complete discussion snapshot is saved: in the database (to reopen it) and as a Markdown file in `analyses-data/` (EBS on AWS) | ✅ Working |
 | 4 | Storage: RM notes | Discussion snapshot with **Client ID, tickers, discussion date, stock price at the time, client's interests**, plus notes and follow-up actions | ✅ Working |
@@ -218,6 +221,22 @@ company records its source, a link to its Yahoo quote page and the time it
 was retrieved. Every news item keeps its own publisher, publication date and
 source link. Nimbus never writes its own news summaries or links: if Yahoo
 gives none, the app says so.
+
+**News sources, in order** (`services/yahoo.py`, `fetch_news`):
+1. Yahoo's news feed (`Ticker.get_news()`): headline, publisher, date, link and summary. In
+   October 2026 it returned nothing for every ticker we tried, so in practice:
+2. Yahoo search (`yf.Search`): headline, publisher, date and link, **no summary**. An article is
+   kept only if Yahoo links it to the ticker **and** its headline or summary names the company.
+3. Yahoo's RSS headline feed (`feeds.finance.yahoo.com/rss/2.0/headline?s=<ticker>`): headline,
+   link, date and a short description, **no publisher**. Its description becomes the summary of
+   the same search article (matched by headline or link), shown as "(summary via Yahoo Finance
+   RSS)". RSS articles not found by search are added only if their **headline** names the
+   company, and are shown as "via Yahoo Finance RSS (publisher not listed)". Singapore listings
+   (e.g. DBS, `D05.SI`) get news only this way: Yahoo search returns none for them.
+
+The newest 5 per company are kept, and they are saved with the discussion. If the RSS feed fails,
+Nimbus shows the search articles as before and says the feed failed.
+`python scripts/debug_news.py <tickers>` shows each source's raw response and the coverage.
 
 **Measures** (FY = latest fiscal year, FY−1 = the previous one):
 
@@ -381,7 +400,7 @@ each test):
 NIMBUS_TEST_DATABASE_URL='mysql+pymysql://<user>:<password>@127.0.0.1:3306/nimbus_test' python -m pytest
 ```
 
-All 120 tests pass on MariaDB 10.11 (MySQL-compatible) through PyMySQL.
+All 130 tests pass on MariaDB 10.11 (MySQL-compatible) through PyMySQL.
 `python scripts/check_database.py` checks that the configured database is
 reachable and its tables exist, printing only the host and row counts, never
 the password.
@@ -490,12 +509,13 @@ in v0.10.1. The list is in the
   missing or change format; Nimbus shows N/A or "not provided" rather than
   guessing. Statement coverage is usually the last four fiscal years.
 - **News** is the latest available at retrieval time; Yahoo does not provide
-  historical news searches. yfinance's news feed returns an empty list rather
-  than an error when Yahoo's news service misbehaves, so Nimbus then tries
-  Yahoo search and reports which source it used, or the real error. Search
-  results are kept only if Yahoo links them to the company's ticker, so a
-  company can show no news rather than unrelated stories. An article linked
-  to two companies in the briefing appears under both.
+  historical news searches. Summaries are Yahoo's own short descriptions,
+  not full-article summaries, and some articles have none (e.g. both NVDA
+  articles in the 29 Oct check). Articles found only in the RSS feed have no
+  publisher. The RSS feed is a public but undocumented Yahoo endpoint and could
+  change; Nimbus then falls back to search results only. Relevance filtering
+  can leave a company with no news rather than unrelated stories. An article
+  linked to two companies in the briefing appears under both.
 - **Company-wide figures only.** Yahoo provides no segment data (for example
   cloud revenue), so comparisons use whole-company statements.
 - **The History tab shows the database host** (never the password). This is

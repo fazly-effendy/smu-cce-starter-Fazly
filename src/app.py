@@ -425,9 +425,13 @@ def render_news_feed(briefing: Briefing, live: bool) -> None:
             text.markdown(f"**[{headline}]({item.source_url})**" if item.source_url else f"**{headline}**")
             when = (format_time_ago(item.published_at) if live else format_date(item.published_at)) \
                 if item.published_at else "date not provided"
-            text.markdown(f'<div class="nb-meta">{chip(item.ticker)} · {esc(item.publisher or "Publisher not provided")}'
+            text.markdown(f'<div class="nb-meta">{chip(item.ticker)} · {esc(publisher_label(item))}'
                           f' · {esc(when)}</div>', unsafe_allow_html=True)
-            text.markdown(md_text(item.summary) if item.summary else "_No summary provided by the source._")
+            if item.summary:
+                text.markdown(md_text(item.summary)
+                              + (f" _(summary via {item.summary_source})_" if item.summary_source else ""))
+            else:
+                text.markdown("_No summary provided by the source._")
             if can_pin:
                 key = article_key(item)
                 text.button("★ Saved to note" if key in pinned else "☆ Save to note", key=f"pin_{key}",
@@ -438,9 +442,23 @@ def render_news_feed(briefing: Briefing, live: bool) -> None:
         st.caption("Notes: " + " · ".join(notes))
 
 
+FALLBACK_SOURCES = {
+    "Yahoo Finance search": "Yahoo search",
+    "Yahoo Finance search + RSS": "Yahoo search, with summaries and extra articles from Yahoo's RSS feed",
+    "Yahoo Finance RSS": "Yahoo's RSS feed (publishers not listed)",
+}
+
+
+def publisher_label(item) -> str:
+    """Publisher, or say where the article came from when the feed names no publisher."""
+    if item.publisher:
+        return item.publisher
+    return f"via {item.via} (publisher not listed)" if item.via else "Publisher not provided"
+
+
 def render_news_status(briefing: Briefing) -> None:
     """Say why news is missing (fetch error vs. genuinely none) in one compact notice."""
-    failed, empty, fallback, skipped = [], [], [], 0
+    failed, empty, fallback, skipped = [], [], {}, 0
     for company in briefing.companies:
         status = company.news_status or {}
         skipped += status.get("skipped") or 0
@@ -448,8 +466,8 @@ def render_news_status(briefing: Briefing) -> None:
             failed.append(f"**{company.ticker}**: {md_text(status.get('message') or 'unknown error')}")
         elif status.get("status") == "empty" or (status and not company.news):
             empty.append(company.ticker)
-        elif status.get("source") == "Yahoo Finance search":
-            fallback.append(company.ticker)
+        elif status.get("source") in FALLBACK_SOURCES:
+            fallback.setdefault(status["source"], []).append(company.ticker)
     if failed:
         st.warning("News could not be retrieved for some companies:  \n" + "  \n".join(failed)
                    + "  \nTry generating again in a few minutes; run `python scripts/debug_news.py "
@@ -457,8 +475,9 @@ def render_news_status(briefing: Briefing) -> None:
     notes = []
     if empty:
         notes.append(f"Yahoo has no recent articles for {', '.join(empty)}.")
-    if fallback:
-        notes.append(f"{', '.join(fallback)}: Yahoo's news feed was empty, so articles come from Yahoo search.")
+    for source, tickers in fallback.items():
+        notes.append(f"{', '.join(tickers)}: Yahoo's news feed was empty, so articles come from "
+                     f"{FALLBACK_SOURCES[source]}.")
     if skipped:
         notes.append(f"{skipped} malformed article{'s' if skipped != 1 else ''} skipped.")
     if notes:

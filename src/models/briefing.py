@@ -25,6 +25,11 @@ class NewsItem:
     published_at: Optional[str]  # ISO 8601 date-time from the source, or None
     source_url: Optional[str]
     thumbnail_url: Optional[str] = None
+    # Set when the summary came from a different Yahoo feed than the article record
+    # (e.g. "Yahoo Finance RSS" for a search article). None = from the article itself.
+    summary_source: Optional[str] = None
+    # Feed the article came from when it has no publisher of its own (Yahoo's RSS feed lists none).
+    via: Optional[str] = None
 
 
 @dataclass

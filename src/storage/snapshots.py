@@ -200,9 +200,13 @@ def briefing_markdown(briefing: Briefing) -> str:
         if company.news:
             for item in company.news:
                 title = f"[{item.headline}]({item.source_url})" if item.source_url else item.headline
-                meta = " · ".join(x for x in [item.publisher, format_date(item.published_at) if item.published_at else None] if x)
+                source = item.publisher or (f"via {item.via} (publisher not listed)" if item.via else None)
+                meta = " · ".join(x for x in [source, format_date(item.published_at) if item.published_at else None] if x)
                 out.append(f"- **{title}**" + (f" ({meta})" if meta else ""))
-                out.append(f"  {item.summary or 'No summary provided by the source.'}")
+                summary = item.summary or "No summary provided by the source."
+                if item.summary and item.summary_source:
+                    summary += f" (summary via {item.summary_source})"
+                out.append(f"  {summary}")
         else:
             out.append("No recent news available.")
         for warning in company.warnings:

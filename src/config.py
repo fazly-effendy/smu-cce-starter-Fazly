@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 APP_NAME = "Nimbus"
-APP_VERSION = "0.10.1"
+APP_VERSION = "0.10.2"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA_DIR = PROJECT_ROOT / "analyses-data"

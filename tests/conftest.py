@@ -38,6 +38,9 @@ def isolated_environment(tmp_path, monkeypatch):
     else:
         monkeypatch.setenv("NIMBUS_DATABASE_URL", f"sqlite:///{tmp_path / 'test.db'}")
     monkeypatch.setattr(yahoo, "yf", fake_yahoo.FakeYF)
+    monkeypatch.setattr(yahoo, "_rss_get", fake_yahoo.fake_rss_get)
+    monkeypatch.setattr(fake_yahoo, "RSS_FEEDS", {})
+    fake_yahoo.RSS_ONLINE = True
     database._engines.clear()
     fake_yahoo.CALLS.clear()
     fake_yahoo.SEARCH_ONLINE = True

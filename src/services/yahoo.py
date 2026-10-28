@@ -15,7 +15,9 @@ import html
 import logging
 import math
 import re
+import xml.etree.ElementTree as ET
 from datetime import date, datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
@@ -130,13 +132,98 @@ def _article_text(article: dict) -> str:
                                      content.get("title"), content.get("summary")) if x)
 
 
+RSS_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline"
+RSS_SOURCE = "Yahoo Finance RSS"
+
+
+def _rss_get(ticker: str):
+    """HTTP GET of Yahoo's RSS headline feed for one ticker (replaced by a fake in the tests)."""
+    import requests  # installed with yfinance
+
+    return requests.get(RSS_URL, params={"s": ticker, "region": "US", "lang": "en-US"},
+                        headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+
+
+def _rss_time(value: Optional[str]) -> Optional[int]:
+    """RSS pubDate ("Wed, 28 Oct 2026 18:23:21 +0000") -> epoch seconds, or None."""
+    try:
+        return int(parsedate_to_datetime(value).timestamp()) if value else None
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def fetch_rss(ticker: str) -> List[dict]:
+    """Items of Yahoo's RSS headline feed for a ticker, in the same flat format as search results.
+
+    The feed gives a headline, link, date and a short description (used as the summary), but no
+    publisher. Raises if the feed cannot be reached or read; the caller treats that as "no RSS".
+    """
+    response = _rss_get(ticker)
+    response.raise_for_status()
+    root = ET.fromstring(response.content)
+    items = []
+    for element in root.findall("./channel/item"):
+        fields = {child.tag: (child.text or "").strip() for child in element}
+        if not fields.get("title"):
+            continue
+        items.append({
+            "uuid": fields.get("guid") or fields.get("link"),
+            "title": fields["title"],
+            "link": fields.get("link") or None,
+            "providerPublishTime": _rss_time(fields.get("pubDate")),
+            "summary": fields.get("description") or None,
+            "publisher": None,
+            "nimbus_via": RSS_SOURCE,
+        })
+    return items
+
+
+def _headline_key(text: Optional[str]) -> str:
+    """Headline for matching the same article across feeds: lower case, letters and digits only."""
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def _with_rss(ticker: str, name: Optional[str], kept: List[dict]) -> Tuple[List[dict], List[dict], Optional[str]]:
+    """Add Yahoo RSS summaries to kept search articles, and the relevant RSS-only articles.
+
+    Returns (kept articles, some now with a summary; RSS-only articles; problem or None).
+    A search article gets the RSS description only if the RSS feed has the same article
+    (same headline or link). An RSS-only article is added only if its HEADLINE names the
+    company: the feed mixes in general market stories. Nothing is generated or guessed.
+    """
+    try:
+        rss = fetch_rss(ticker)
+    except Exception as exc:
+        return kept, [], f"RSS feed failed ({exc.__class__.__name__})"
+    by_title = {_headline_key(item["title"]): item for item in rss}
+    by_link = {item["link"]: item for item in rss if item["link"]}
+    enriched = []
+    for article in kept:
+        article = dict(article)
+        if not _clean_text(article.get("summary")):
+            match = by_title.get(_headline_key(article.get("title"))) or by_link.get(article.get("link"))
+            if match and match.get("summary"):
+                article["summary"] = match["summary"]
+                article["nimbus_summary_source"] = RSS_SOURCE
+        enriched.append(article)
+    kept_titles = {_headline_key(a.get("title")) for a in kept}
+    kept_links = {a.get("link") for a in kept if a.get("link")}
+    rss_only = [item for item in rss
+                if _headline_key(item["title"]) not in kept_titles and item["link"] not in kept_links
+                and mentions_company(item["title"], ticker, name)]
+    return enriched, rss_only, None
+
+
 def fetch_news(ticker: str, count: int = 10, name: Optional[str] = None) -> dict:
     """Recent news for a ticker, with an honest account of what happened.
 
     yfinance's news feed returns an empty list (rather than an error) when Yahoo's
-    news service answers unexpectedly, so this tries two routes:
-    1. Ticker.get_news() - Yahoo's ticker news feed;
-    2. Search(ticker).news - Yahoo's search service, a separate endpoint.
+    news service answers unexpectedly, so this tries:
+    1. Ticker.get_news() - Yahoo's ticker news feed (has summaries);
+    2. if that is empty: Search(ticker).news - Yahoo's search service (publisher, no
+       summaries), filtered for relevance, plus Yahoo's RSS headline feed, which adds
+       summaries to the same articles and contributes articles whose headline names
+       the company (Singapore listings get news only this way).
     Returns {"items": raw items, "source": which route worked, "status": "ok" |
     "empty" | "error", "message": explanation or None}.
     """
@@ -163,10 +250,18 @@ def fetch_news(ticker: str, count: int = 10, name: Optional[str] = None) -> dict
         related = [a for a in found if isinstance(a, dict)
                    and ticker.upper() in [str(t).upper() for t in a.get("relatedTickers") or []]]
         about = [a for a in related if mentions_company(_article_text(a), ticker, name)]
-        if about:
-            return {"items": about, "source": "Yahoo Finance search", "status": "ok",
+        about, rss_only, rss_problem = _with_rss(ticker, name, about)
+        items = sorted(about + rss_only, key=lambda a: a.get("providerPublishTime") or 0, reverse=True)
+        if items:
+            used_rss = bool(rss_only) or any(a.get("nimbus_summary_source") for a in about)
+            source = ("Yahoo Finance search + RSS" if about and used_rss
+                      else "Yahoo Finance search" if about else RSS_SOURCE)
+            return {"items": items, "source": source, "status": "ok",
                     "message": "Yahoo's news feed returned nothing, so these articles come from Yahoo search "
-                               f"(only those that name {ticker.upper()} and that Yahoo links to it)."}
+                               "(only those Yahoo links to the ticker and that name the company) and Yahoo's "
+                               "RSS headline feed (summaries, and articles whose headline names the company)."
+                               + (f" {rss_problem}." if rss_problem else "")
+                               + (" Yahoo search failed: " + "; ".join(problems) + "." if problems else "")}
         if related:
             return {"items": [], "source": None, "status": "empty",
                     "message": f"Yahoo's news feed returned nothing. Yahoo search linked {len(related)} "
@@ -308,6 +403,7 @@ def _clean_text(value) -> Optional[str]:
     text = _TAG_PATTERN.sub(" ", value)
     text = html.unescape(text)
     text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r" ([.,;:!?])", r"\1", text)  # "laptop ." left by a removed tag -> "laptop."
     return text or None
 
 
@@ -360,6 +456,7 @@ def _parse_article(article, ticker: str) -> Optional[NewsItem]:
         return None
     summary = _clean_text(content.get("summary")) or _clean_text(content.get("description")) \
         or _clean_text(article.get("summary"))
+    via = article.get("nimbus_via")
     provider = content.get("provider") if isinstance(content.get("provider"), dict) else {}
     publisher = provider.get("displayName") or article.get("publisher")
     url = (
@@ -375,6 +472,8 @@ def _parse_article(article, ticker: str) -> Optional[NewsItem]:
         published_at=_published_from(content, article),
         source_url=url,
         thumbnail_url=_thumbnail_from(content, article),
+        summary_source=article.get("nimbus_summary_source") if summary else None,
+        via=via if isinstance(via, str) else None,
     )
 
 

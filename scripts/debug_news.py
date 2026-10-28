@@ -15,7 +15,7 @@ For each ticker it prints:
      publisher?), whether it has a summary, and whether it names the company;
   7. COVERAGE: how many kept search articles the RSS feed could give a summary to
      (matched by headline or link), and how many extra relevant RSS-only articles
-     there are. Nimbus does not use the RSS feed yet: this measures whether it would help.
+     there are. Since v0.10.2 Nimbus uses the RSS feed this way (services/yahoo.py, fetch_news).
 Copy the output into a message.
 """
 

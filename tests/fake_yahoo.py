@@ -212,6 +212,39 @@ SEARCH_NEWS = {
 }
 
 
+# Yahoo's RSS headline feed, keyed by ticker. Unknown tickers get an empty feed.
+RSS_FEEDS: dict = {}
+RSS_ONLINE = True  # set to False in a test to simulate the RSS feed being unreachable
+
+
+def rss_xml(*items) -> bytes:
+    """Build an RSS document from (title, link, description, pubDate) tuples."""
+    from xml.sax.saxutils import escape
+
+    body = "".join(
+        f"<item><title>{escape(t)}</title><link>{escape(l)}</link><description>{escape(d)}</description>"
+        f"<pubDate>{p}</pubDate><guid>{escape(l)}</guid></item>"
+        for t, l, d, p in items
+    )
+    return f'<?xml version="1.0"?><rss version="2.0"><channel><title>Yahoo</title>{body}</channel></rss>'.encode()
+
+
+class FakeRssResponse:
+    def __init__(self, content: bytes, status: int = 200):
+        self.content, self.status_code = content, status
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+def fake_rss_get(ticker: str):
+    CALLS[("rss", ticker)] += 1
+    if not RSS_ONLINE:
+        raise ConnectionError("RSS feed unreachable")
+    return FakeRssResponse(RSS_FEEDS.get(ticker.upper(), rss_xml()))
+
+
 class FakeSearch:
     def __init__(self, query, max_results=8, news_count=8, **kwargs):
         CALLS[("search", query)] += 1

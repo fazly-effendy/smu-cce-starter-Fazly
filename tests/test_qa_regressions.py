@@ -191,7 +191,7 @@ def test_sidebar_shows_version_and_server_start_time():
     app = AppTest.from_file(APP, default_timeout=60)
     app.run()
     captions = [c.value for c in app.sidebar.caption]
-    assert any(c.startswith("Nimbus 0.10.1") and "server started" in c for c in captions), captions
+    assert any(c.startswith("Nimbus 0.10.2") and "server started" in c for c in captions), captions
 
 
 # --- Step 12 QA run on Amazon RDS (29 Oct 2026, QA-1029) -----------------------------------------
