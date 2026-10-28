@@ -452,7 +452,10 @@ In short:
 1. Push to GitHub. EC2 clones from GitHub.
 2. In the Sandbox, open **CloudFormation → Create stack → Upload a template file**, choose
    `scripts/nimbus-stack.yaml`, name the stack `nimbus`, type a new `DBPassword`
-   (letters and digits, never a real password), and set `GitBranch` if not `main`.
+   (letters and digits, never a real password), and set `GitCommit` to the exact commit
+   to deploy (e.g. `e49a2c6`; empty = latest on `GitBranch`, default `main`). The deployed
+   commit is shown in the app's sidebar and in the EC2 system log. To deploy new code,
+   delete and recreate the stack: user data runs only when the instance is created.
 3. Wait for `CREATE_COMPLETE` (about 15–20 minutes, mostly RDS). It is only reported after
    Nimbus has connected to RDS and answers its health check.
 4. Open the `NimbusUrl` output (http://…:8501).

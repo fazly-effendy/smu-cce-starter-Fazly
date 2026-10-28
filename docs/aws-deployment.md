@@ -101,8 +101,16 @@ environment, not to this stack.
    - `DBPassword`: type a **new** password, 8–41 letters and digits only. Do
      not reuse any real password. Nobody needs to see it again: the app reads
      it from the instance.
-   - `GitBranch`: `main`, or `feature/unified-nimbus-prototype` until it is merged.
+   - `GitBranch`: `main`.
+   - `GitCommit`: **for a recorded deployment (evidence, final demo), the exact
+     commit to deploy**, e.g. `e49a2c6`, copied from `git log --oneline -1` or
+     GitHub. Leave it empty to deploy the latest commit of `GitBranch`.
    - Leave the others at their defaults (`DBUsername` = `nimbusadmin`).
+
+**Deploying new code:** EC2 user data runs only once, when the instance is
+first created. Changing `GitBranch`, `GitCommit` or the template on a running
+stack does **not** update the app on the existing instance. To deploy a new
+version, delete the stack and create it again with the new `GitCommit`.
 6. Click **Next** twice, then **Submit**. It takes about 15–20 minutes: RDS
    takes about 10 minutes, then EC2 setup about 5–10 minutes.
 
@@ -115,9 +123,12 @@ tab with a visible password (it shows `****`, which is fine).
    *"Received SUCCESS signal with UniqueId i-…"* (CloudFormation's own wording for a
    success; it does not display the reason text), then the stack at `CREATE_COMPLETE`.
    **Which code is deployed:** the bottom of the app's sidebar shows
-   *Nimbus 0.9.1 · commit … · server started …*. The same commit is in the EC2 system log
+   *Nimbus … · commit … · server started …*. The same commit is in the EC2 system log
    (**EC2 → nimbus-app → Actions → Monitor and troubleshoot → Get system log**, line
-   `nimbus-setup: deployed commit …`). It should match the top commit of the deployed branch on GitHub.
+   `nimbus-setup: deployed commit e49a2c6 from branch main (requested commit: e49a2c6)`).
+   With `GitCommit` set, the deployed and requested commits must be the same; with it
+   empty, the line says `requested commit: latest` and the commit should match the top
+   of the branch on GitHub at deployment time.
 2. **Stack → Outputs:** `NimbusUrl` and `DatabaseEndpoint`.
 3. **RDS → Databases → nimbus-db → Connectivity & security:**
    - *Publicly accessible: No*;
@@ -147,7 +158,19 @@ Optional, for a viva question on SQL: to run SQL directly against RDS, set
 `AllowedSshCidr` to your own IP followed by `/32` when creating the stack, then
 SSH in. Run `sudo dnf install -y mariadb105`, then
 `mysql -h <DatabaseEndpoint> -u nimbusadmin -p nimbus`, and type the password
-at the prompt. Then run `SELECT tickers, client_reference, filename FROM briefings;`.
+at the prompt. Then run, for example:
+
+```sql
+-- every saved discussion, newest first, with its client
+SELECT d.discussion_date, d.client_id, c.client_name, d.tickers, d.client_interests
+FROM discussions d JOIN clients c ON c.client_id = d.client_id
+ORDER BY d.discussion_date DESC, d.created_at DESC;
+
+-- the values recorded for each company at the time of each discussion
+SELECT discussion_id, ticker, stock_price, price_date, revenue_growth, net_margin, debt_to_equity
+FROM discussion_companies ORDER BY discussion_id, ticker;
+```
+
 Close SSH again afterwards. This step is not needed for the demo.
 
 ## Troubleshooting
@@ -158,6 +181,7 @@ Close SSH again afterwards. This step is not needed for the demo.
 | `CREATE_FAILED` on `AppServer`: *cannot reach RDS* | Check `nimbus-db-sg` inbound (3306 from `nimbus-app-sg`) and that `nimbus-db` is *Available*. The system log shows each attempt from `check_database.py`. |
 | `CREATE_FAILED` on `AppServer` (other reason) | **EC2 → nimbus-app → Actions → Monitor and troubleshoot → Get system log**; look for lines after `nimbus-setup` / `fatal` / `ERROR`. |
 | `Remote branch … not found` | The `GitBranch` parameter does not exist on GitHub; push it or use `main`. |
+| `Commit … not found in the repository` (Events reason or system log) | The `GitCommit` value is wrong or not pushed yet. Check `git log --oneline -1` and that it is on GitHub, then delete and recreate the stack. |
 | `DBInstanceIdentifier … already exists` | A `nimbus-db` from an earlier stack is still there: wait until it is deleted, or use another stack name. |
 | History tab says *Cannot reach the briefing database* | RDS stopped or still starting (e.g. after the Sandbox was resumed). Wait until *Available*, then reload. |
 | Page does not load | Use `http://`, not `https://`; check the `nimbus-app-sg` inbound rule for 8501. |
@@ -206,6 +230,11 @@ wait for any operation in progress to finish.
   again after a reboot.
 - **Health-checked creation:** a green stack means a working app connected to
   its database, not just a running server.
-- **Open item for scaling:** briefing files are on one instance's disk. With
-  several instances behind a load balancer, a briefing saved on one would not
-  open on another. This is resolved in Stage 3, after the Week 9 lesson.
+- **Ready for several servers, not yet scaled:** each saved discussion's complete
+  snapshot is stored in RDS (`discussions.snapshot_json`), so any app server can
+  reopen any discussion. The Markdown copy on a server's disk is only a readable
+  copy, and the download is rebuilt from the snapshot when that server lacks the
+  file. Still open for Stage 3, after the Week 9 lesson: a load balancer and an
+  Auto Scaling group; sticky sessions (each user's unsaved comparison lives in one
+  server's memory, so it is lost if that server is replaced); and database
+  connection limits.
