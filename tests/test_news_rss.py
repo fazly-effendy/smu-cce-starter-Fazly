@@ -142,5 +142,5 @@ def test_news_tab_labels_rss_summaries_and_sources():
     assert "Stronger orders. _(summary via Yahoo Finance RSS)_" in page
     assert "Barron&#x27;s" in page or "Barron's" in page  # the search article keeps its publisher
     assert "via Yahoo Finance RSS (publisher not listed)" in page
-    captions = " ".join(c.value for c in app.caption)
-    assert "AAPL: Yahoo's news feed was empty, so articles come from Yahoo search, with summaries" in captions
+    status = next(c.value for c in app.caption if c.value.startswith("For this comparison: "))
+    assert "AAPL: Yahoo's news feed was empty, so articles come from Yahoo search, with summaries" in status

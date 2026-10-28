@@ -481,7 +481,8 @@ def render_news_status(briefing: Briefing) -> None:
     if skipped:
         notes.append(f"{skipped} malformed article{'s' if skipped != 1 else ''} skipped.")
     if notes:
-        st.caption(" ".join(notes))
+        # Describes the whole comparison, not only the companies the filter currently shows.
+        st.caption("For this comparison: " + " ".join(notes))
 
 
 def render_note(note: Optional[RmNote]) -> None:

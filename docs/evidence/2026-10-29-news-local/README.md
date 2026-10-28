@@ -27,9 +27,9 @@ Status lines shown above the articles:
 - *"AAPL, JPM: Yahoo's news feed was empty, so articles come from Yahoo search, with summaries and extra articles from Yahoo's RSS feed."*
 - *"D05.SI, O39.SI: Yahoo's news feed was empty, so articles come from Yahoo's RSS feed (publishers not listed)."*
 
-## Findings (low, not fixed)
+## Findings (low)
 
-- The status line describes the whole comparison, even when the company filter shows only one company.
+- The status line describes the whole comparison, even when the company filter shows only one company. *Later fixed in the wording: the line now starts "For this comparison:" (commit after this test).*
 - A story naming both DBS and OCBC appears under both companies. This is correct per company, so it shows twice in the combined list.
 - The live view shows recent articles as relative times ("16d ago"); a reopened discussion shows dates. They agree.
 
