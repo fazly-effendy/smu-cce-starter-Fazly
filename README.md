@@ -119,7 +119,7 @@ criteria are from the Lesson 5 slides.
 
 | # | Feature | What Nimbus does | Status |
 |---|---|---|---|
-| 1 | Unified UI | One app combining financials, news and price/ratings; numbers formatted ($416.16B, 12.3%); news shows publisher (or the feed it came from), date, source link and a summary taken from Yahoo (search article or Yahoo's RSS headline feed), never generated; companies found by name or ticker | ✅ Working locally (v0.10.2). Live check on a laptop 29 Oct 2026: Yahoo's RSS feed gave summaries for 8 of the 13 relevant search articles, plus 22 relevant RSS-only articles. ⏳ Not yet on AWS |
+| 1 | Unified UI | One app combining financials, news and price/ratings; numbers formatted ($416.16B, 12.3%); news shows publisher (or the feed it came from), date, source link and a summary taken from Yahoo (search article or Yahoo's RSS headline feed), never generated; companies found by name or ticker | ✅ Working locally (v0.10.2): live laptop test on 29 Oct 2026, 18 of 20 articles with a summary, all with a source, none off-topic ([local evidence](docs/evidence/2026-10-29-news-local/README.md)). ⏳ Not yet on AWS |
 | 2 | Company comparison | 2–6 companies: share prices side by side; revenue growth, net and operating margin, debt-to-equity, and their trends over the reported fiscal years; plus ROA, debt-to-assets, P/E, market cap | ✅ Working |
 | 3 | Storage: save analysis | The complete discussion snapshot is saved: in the database (to reopen it) and as a Markdown file in `analyses-data/` (EBS on AWS) | ✅ Working |
 | 4 | Storage: RM notes | Discussion snapshot with **Client ID, tickers, discussion date, stock price at the time, client's interests**, plus notes and follow-up actions | ✅ Working |
