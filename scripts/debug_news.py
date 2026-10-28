@@ -8,26 +8,34 @@ For each ticker it prints:
   1. the raw result of yf.Ticker(t).get_news() - Yahoo's news feed;
   2. the raw news from yf.Search(t) - Yahoo's search service (Nimbus's fallback);
   3. any warnings yfinance logged instead of raising;
-  4. how many articles Nimbus's parser extracts;
-  5. for Yahoo search news: which tickers Yahoo links each article to, and
-     whether it has a summary (Feature 1 needs a summary and a source);
-  6. whether Yahoo's per-ticker RSS headline feed answers (a possible
-     source of summaries; Nimbus does not use it yet).
-Copy the output into a message if news is still missing.
+  4. how many articles Nimbus keeps, and whether each has a summary;
+  5. every Yahoo search article with Nimbus's two relevance tests: is it linked to
+     the ticker, and does its headline or summary name the company? Kept only if both;
+  6. every item of Yahoo's per-ticker RSS headline feed: its fields (is there a
+     publisher?), whether it has a summary, and whether it names the company;
+  7. COVERAGE: how many kept search articles the RSS feed could give a summary to
+     (matched by headline or link), and how many extra relevant RSS-only articles
+     there are. Nimbus does not use the RSS feed yet: this measures whether it would help.
+Copy the output into a message.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import yfinance as yf  # noqa: E402
 
 from services import yahoo  # noqa: E402
+
+RSS_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline"
 
 
 def preview(items, label: str) -> None:
@@ -40,41 +48,70 @@ def preview(items, label: str) -> None:
         print("    first item (truncated):", json.dumps(first, default=str)[:600])
 
 
-def search_detail(ticker: str) -> None:
-    """Per article from Yahoo search: linked tickers and whether a summary exists."""
+def normalise(text: Optional[str]) -> str:
+    """Headline key for matching: lower case, letters and digits only ("Apple Wraps Up…" -> "applewrapsup…")."""
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def company_name(ticker: str) -> Optional[str]:
+    """The company name Nimbus uses for the relevance test (from Yahoo, as in the app)."""
+    try:
+        return yahoo.extract_profile(yf.Ticker(ticker).info, ticker)["name"]
+    except Exception as exc:
+        print(f"  (company name unavailable: {exc.__class__.__name__}; using the ticker and Nimbus's aliases)")
+        return None
+
+
+def search_articles(ticker: str, name: Optional[str]) -> List[Dict[str, object]]:
+    """Every Yahoo search article with Nimbus's two relevance tests."""
     try:
         news = yf.Search(ticker, max_results=1, news_count=10).news or []
     except Exception as exc:
         print(f"  search detail unavailable: {exc}")
-        return
+        return []
+    rows = []
     for article in news[:10]:
-        related = article.get("relatedTickers") or []
+        if not isinstance(article, dict):
+            continue
+        related = [str(t).upper() for t in article.get("relatedTickers") or []]
+        linked = ticker.upper() in related
+        names = yahoo.mentions_company(yahoo._article_text(article), ticker, name)
         has_summary = bool(article.get("summary") or (article.get("content") or {}).get("summary"))
-        mark = "KEEP" if ticker.upper() in [str(t).upper() for t in related] else "drop"
-        print(f"    [{mark}] related={related} summary={'yes' if has_summary else 'no'} | "
-              f"{str(article.get('title'))[:60]}")
+        rows.append({"title": str(article.get("title") or ""), "link": article.get("link"),
+                     "publisher": article.get("publisher"), "linked": linked, "names": names,
+                     "keep": linked and names, "summary": has_summary})
+    return rows
 
 
-def rss_probe(ticker: str) -> None:
-    """Does Yahoo's RSS headline feed answer for this ticker, with summaries?"""
-    import xml.etree.ElementTree as ET
+def rss_items(ticker: str) -> Optional[List[Dict[str, object]]]:
+    """All items of Yahoo's RSS headline feed for this ticker (None if it did not answer)."""
+    import requests  # already installed with yfinance
 
-    import requests
-
-    url = "https://feeds.finance.yahoo.com/rss/2.0/headline"
     try:
-        response = requests.get(url, params={"s": ticker, "region": "US", "lang": "en-US"},
+        response = requests.get(RSS_URL, params={"s": ticker, "region": "US", "lang": "en-US"},
                                 headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         print(f"  RSS feed: HTTP {response.status_code}, {len(response.content)} bytes")
-        items = ET.fromstring(response.content).findall("./channel/item") if response.ok else []
+        if not response.ok:
+            return None
+        root = ET.fromstring(response.content)
     except Exception as exc:
         print(f"  RSS feed failed: {exc.__class__.__name__}: {exc}")
-        return
-    with_summary = sum(1 for item in items if (item.findtext("description") or "").strip())
-    print(f"  RSS feed: {len(items)} items, {with_summary} with a summary")
-    for item in items[:3]:
-        print(f"    - {item.findtext('pubDate')} | {(item.findtext('title') or '')[:60]} | "
-              f"summary: {(item.findtext('description') or '')[:60]!r}")
+        return None
+    items = []
+    for item in root.findall("./channel/item"):
+        fields = {child.tag: (child.text or "").strip() for child in item}
+        items.append({
+            "tags": sorted(fields),
+            "title": fields.get("title", ""),
+            "link": fields.get("link", ""),
+            "date": fields.get("pubDate", ""),
+            "summary": fields.get("description", ""),
+            # Anything that could name the publisher, whatever the feed calls it.
+            "publisher": next((value for tag, value in fields.items()
+                               if any(word in tag.lower() for word in ("source", "creator", "author", "publisher"))
+                               and value), None),
+        })
+    return items
 
 
 def main(tickers) -> None:
@@ -90,18 +127,55 @@ def main(tickers) -> None:
             preview(yf.Search(ticker, max_results=1, news_count=10).news, "Search(...).news")
         except Exception as exc:
             print(f"  Search(...).news raised {exc.__class__.__name__}: {exc}")
-        result = yahoo.fetch_news(ticker)
+
+        name = company_name(ticker)
+        print(f"  Company name used for relevance: {name or '(none)'}")
+        result = yahoo.fetch_news(ticker, name=name)
         items, skipped = yahoo.parse_news_with_count(result["items"], ticker, limit=10)
-        print(f"  Nimbus: status={result['status']}, source={result['source']}, parsed={len(items)}, "
+        print(f"  Nimbus: status={result['status']}, source={result['source']}, kept={len(items)}, "
               f"skipped={skipped}")
         if result["message"]:
             print(f"  Nimbus message: {result['message']}")
-        for item in items[:3]:
-            print(f"    - {item.published_at} | {item.publisher} | {item.headline[:70]} | "
-                  f"summary: {'yes' if item.summary else 'no'}")
-        print("  Yahoo search articles (KEEP = linked to this ticker, as Nimbus now requires):")
-        search_detail(ticker)
-        rss_probe(ticker)
+
+        print("  Yahoo search articles (linked = Yahoo links it to the ticker; names = headline/summary "
+              "names the company; KEEP only if both):")
+        search = search_articles(ticker, name)
+        for row in search:
+            print(f"    [{'KEEP' if row['keep'] else 'drop'}] linked={'yes' if row['linked'] else 'no '} "
+                  f"names={'yes' if row['names'] else 'no '} summary={'yes' if row['summary'] else 'no'} | "
+                  f"{row['publisher']} | {row['title'][:70]}")
+
+        rss = rss_items(ticker)
+        if rss is None:
+            print()
+            continue
+        print(f"  RSS item fields: {rss[0]['tags'] if rss else '(no items)'}")
+        print(f"  RSS items ({len(rss)}; names = headline/summary names the company):")
+        for item in rss:
+            names = yahoo.mentions_company(f"{item['title']} {item['summary']}", ticker, name)
+            item["names"] = names
+            print(f"    [{'names' if names else 'other'}] publisher={item['publisher'] or 'none'} "
+                  f"| {item['date']} | {item['title'][:60]} | summary: {item['summary'][:70]!r}")
+
+        # Coverage: which kept search articles the RSS feed could give a summary to.
+        by_title = {normalise(item["title"]): item for item in rss if item["title"]}
+        by_link = {item["link"]: item for item in rss if item["link"]}
+        kept = [row for row in search if row["keep"]]
+        matched_keys = set()
+        print("  Kept search articles and an RSS summary for them:")
+        with_summary = 0
+        for row in kept:
+            match = by_title.get(normalise(row["title"])) or by_link.get(row["link"])
+            if match and match["summary"]:
+                with_summary += 1
+                matched_keys.add(normalise(match["title"]))
+            print(f"    [{'RSS summary' if match and match['summary'] else 'no summary '}] {row['title'][:70]}")
+        extra = [item for item in rss if item["names"] and item["summary"]
+                 and normalise(item["title"]) not in matched_keys
+                 and normalise(item["title"]) not in {normalise(r["title"]) for r in kept}]
+        print(f"  COVERAGE {ticker}: kept search articles {len(kept)}, of which with an RSS summary "
+              f"{with_summary}; extra relevant RSS-only articles with a summary {len(extra)} "
+              f"(publisher in feed: {'yes' if any(i['publisher'] for i in rss) else 'no'})")
         print()
 
 
