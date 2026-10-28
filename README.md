@@ -11,15 +11,15 @@ exactly as it was.
 
 Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 
-> **Status (v0.10.0).** Implements the instructor's feedback of 27 Oct 2026:
+> **Status (v0.10.1).** Implements the instructor's feedback of 27 Oct 2026:
 > client-discussion snapshots (Client ID, ticker, discussion date, stock price
 > at the time, client's interests) stored in `clients`, `discussions` and
-> `discussion_companies`, retrievable by client and by company. The
-> instructor's acceptance test steps 1–11 pass as an automated test
-> (`tests/test_app_workflow.py`); step 12 (the same on Amazon RDS) is the next
-> AWS deployment. The AWS environment itself (CloudFormation: VPC, EC2, RDS)
-> was deployed and verified on 25 and 27 Oct 2026. Auto scaling (Feature 6)
-> follows the Week 9 lesson; see [Project status](#project-status).
+> `discussion_companies`, retrievable by client and by company. **The
+> instructor's acceptance test passes: steps 1–11 as an automated test
+> (`tests/test_app_workflow.py`), and step 12 on Amazon RDS in the AWS Sandbox
+> on 29 Oct 2026 ([evidence](docs/evidence/2026-10-29-step12/README.md)).**
+> The environment is created by CloudFormation (VPC, EC2, RDS). Auto scaling
+> (Feature 6) follows the Week 9 lesson; see [Project status](#project-status).
 
 ---
 
@@ -120,7 +120,7 @@ criteria are from the Lesson 5 slides.
 | 2 | Company comparison | 2–6 companies: share prices side by side; revenue growth, net and operating margin, debt-to-equity, and their trends over the reported fiscal years; plus ROA, debt-to-assets, P/E, market cap | ✅ Working |
 | 3 | Storage: save analysis | The complete discussion snapshot is saved: in the database (to reopen it) and as a Markdown file in `analyses-data/` (EBS on AWS) | ✅ Working |
 | 4 | Storage: RM notes | Discussion snapshot with **Client ID, tickers, discussion date, stock price at the time, client's interests**, plus notes and follow-up actions | ✅ Working |
-| 5 | Database search | `clients`, `discussions`, `discussion_companies` in SQL; search by client, company (ticker or name) and date; reopen the matching discussion | ✅ Working locally (SQLite) and tested on MySQL-compatible MariaDB. ⏳ Instructor's step 12 on Amazon RDS: next deployment |
+| 5 | Database search | `clients`, `discussions`, `discussion_companies` in SQL; search by client, company (ticker or name) and date; reopen the matching discussion | ✅ Working on Amazon RDS in the Sandbox: instructor's acceptance test step 12 passed on 29 Oct 2026 ([evidence](docs/evidence/2026-10-29-step12/README.md)); SQLite locally |
 | 6 | Scaling | Automatically add and remove capacity | ⏳ After the Week 9 lesson. Reopening already works from any app server (snapshot stored in the database) |
 
 | Marking area | Where to look |
@@ -381,7 +381,7 @@ each test):
 NIMBUS_TEST_DATABASE_URL='mysql+pymysql://<user>:<password>@127.0.0.1:3306/nimbus_test' python -m pytest
 ```
 
-All 116 tests pass on MariaDB 10.11 (MySQL-compatible) through PyMySQL.
+All 120 tests pass on MariaDB 10.11 (MySQL-compatible) through PyMySQL.
 `python scripts/check_database.py` checks that the configured database is
 reachable and its tables exist, printing only the host and row counts, never
 the password.
@@ -442,7 +442,7 @@ In short:
 |---|---|---|
 | 1 | VPC with public and private subnets, security group, EC2 installed by user data and run as a systemd service | ✅ Deployed in the Sandbox (`CREATE_COMPLETE`, app reachable) |
 | 2 | Amazon RDS for MySQL in the private subnets, reachable only from the app server | ✅ Deployed and verified in the Sandbox (25 and 27 Oct 2026), including a reboot. [Evidence](docs/evidence/2026-10-27-stage2/README.md). The template does not change for v0.10.0: the app creates the new tables on first start |
-| 2b | Instructor's acceptance test step 12: steps 1–11 on Amazon RDS with v0.10.0 | ⏳ Next deployment |
+| 2b | Instructor's acceptance test step 12: steps 1–11 on Amazon RDS with v0.10.0 | ✅ Passed on 29 Oct 2026, including a reboot. [Evidence](docs/evidence/2026-10-29-step12/README.md); the small defects found are fixed in v0.10.1 |
 | 3 | Scaling (Week 9 lesson) | Not started |
 
 `scripts/lesson5.yaml` and `scripts/lesson5-nimbus.yaml` are the course's
@@ -477,6 +477,12 @@ search all matched the expected results. The defects found, and what was done:
 The four QA briefings saved before the date fix keep their UTC search date.
 QA run 2 (27 Oct 2026) passed every other check, including the reboot test:
 [evidence](docs/evidence/2026-10-27-stage2/README.md).
+
+**QA run 3 (29 Oct 2026): the instructor's acceptance test step 12 on Amazon
+RDS** passed 29 of 30 checks, including steps 1–11 and a reboot. One medium
+defect (the save pop-up stayed open after saving) and six low ones are fixed
+in v0.10.1. The list is in the
+[step 12 evidence](docs/evidence/2026-10-29-step12/README.md#defects-found-and-fixes-in-v0101).
 
 ## Known limitations
 

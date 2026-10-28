@@ -26,8 +26,8 @@ def save_discussion(briefing: Briefing, note: RmNote) -> SaveResult:
     two stores never disagree.
     """
     existing = database.get_discussion(briefing.briefing_id)
-    if existing:
-        return SaveResult(briefing, existing["filename"], created=False)
+    if existing:  # already saved: report the stored version, not this attempt
+        return SaveResult(snapshots.briefing_from_json(existing["snapshot_json"]), existing["filename"], created=False)
 
     note = replace(note, client_id=database.normalise_client_id(note.client_id))
     if not (note.client_interests or "").strip():

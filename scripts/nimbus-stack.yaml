@@ -372,5 +372,5 @@ Outputs:
     Description: RDS endpoint (reachable only from inside the VPC, from nimbus-app-sg)
     Value: !GetAtt NimbusDatabase.Endpoint.Address
   DatabaseName:
-    Description: Database that holds the briefings, briefing_tickers and rm_notes tables
+    Description: Database that holds the clients, discussions and discussion_companies tables
     Value: nimbus

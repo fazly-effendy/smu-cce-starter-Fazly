@@ -628,11 +628,19 @@ def client_options() -> Dict[str, str]:
         return {}
 
 
+def client_name_of(client_id: str) -> Optional[str]:
+    """The stored name of an existing client (None if it has none or the database is unreachable)."""
+    try:
+        return next((row["client_name"] for row in database.list_clients() if row["client_id"] == client_id), None)
+    except Exception:
+        return None
+
+
 def selected_client() -> Tuple[Optional[str], Optional[str]]:
     """(client ID, client name) chosen at the top of the page; ID is None if nothing usable is entered."""
     choice = st.session_state.get("client_choice") or NEW_CLIENT
     if choice != NEW_CLIENT:
-        return choice, None
+        return choice, client_name_of(choice)
     raw = (st.session_state.get("new_client_id") or "").strip()
     name = (st.session_state.get("new_client_name") or "").strip() or None
     try:
@@ -756,7 +764,7 @@ def perform_save(briefing: Briefing, values: Dict[str, object]) -> bool:
         state["save_error"] = f"The discussion could not be saved: {exc}"
         return False
     state["saved"][briefing.briefing_id] = result.filename
-    state["saved_note"] = result.briefing.note or note
+    state["saved_note"] = result.briefing.note or note  # the stored note, also when it was saved before
     state["client_choice"] = client_id  # a new client is now an existing one: select it
     state.pop("save_error", None)
     state["toast"] = f"Discussion with {client_id} saved"
@@ -778,8 +786,12 @@ def save_from_header(briefing: Briefing) -> None:
 
 
 def save_from_dialog(briefing: Briefing) -> None:
-    if not perform_save(briefing, note_values(briefing, prefix="dlg_")):
-        st.session_state["open_note_dialog"] = briefing.briefing_id  # keep the dialog open to show the error
+    """Save from the pop-up. A click inside a dialog reruns only the dialog, and a dialog only
+    closes when st.rerun() is called inside it. So on success the dialog sees close_note_dialog
+    and calls st.rerun(), which closes it and redraws the page (saved state + toast). On failure
+    it simply stays open and shows the error."""
+    if perform_save(briefing, note_values(briefing, prefix="dlg_")):
+        st.session_state["close_note_dialog"] = briefing.briefing_id
 
 
 def note_fields(briefing: Briefing, prefix: str = "", prefill: Optional[Dict[str, object]] = None) -> None:
@@ -790,11 +802,13 @@ def note_fields(briefing: Briefing, prefix: str = "", prefill: Optional[Dict[str
     def k(field: str) -> str:
         return f"{prefix}{field}_{key}"
 
-    left, right = st.columns([1, 3])
-    left.date_input("Discussion date *", value=prefill.get("date") or local_today(), key=k("date"))
-    right.text_area("Client's interests *", key=k("interests"), value=prefill.get("interests") or "",
-                    placeholder="What the client is interested in, e.g. dividend income, AI exposure, lower debt",
-                    height=90)
+    # Interests come first: the dialog focuses its first field, and a date picker would pop open
+    # over the error message.
+    left, right = st.columns([3, 1])
+    left.text_area("Client's interests *", key=k("interests"), value=prefill.get("interests") or "",
+                   placeholder="What the client is interested in, e.g. dividend income, AI exposure, lower debt",
+                   height=90)
+    right.date_input("Discussion date *", value=prefill.get("date") or local_today(), key=k("date"))
     st.text_area("Discussion notes", key=k("notes"), value=prefill.get("notes") or "",
                  placeholder="What was discussed with the client?")
     left, right = st.columns(2)
@@ -813,6 +827,8 @@ def client_line() -> str:
 
 @st.dialog("Save discussion", width="large")
 def note_dialog(briefing: Briefing) -> None:
+    if st.session_state.pop("close_note_dialog", None) == briefing.briefing_id:
+        st.rerun()  # saved: closing the dialog redraws the page with the saved state and the toast
     st.caption("Fields marked * are required. Anything typed in the Discussion tab is carried over.")
     st.markdown(client_line(), unsafe_allow_html=True)
     error = st.session_state.pop("save_error", None)
@@ -835,14 +851,16 @@ def data_retrieved_at(briefing: Briefing) -> str:
 def briefing_header(briefing: Briefing) -> None:
     """Summary line, saved/unsaved indicator and a Save button that is visible from every tab."""
     saved = st.session_state["saved"].get(briefing.briefing_id)
-    info_col, status_col, button_col = st.columns([5, 1.3, 1.6], vertical_alignment="center")
     retrieved = data_retrieved_at(briefing)
     when = f"generated {format_timestamp(briefing.created_at)}"
     if format_timestamp(retrieved) != format_timestamp(briefing.created_at):
         when += f" from data retrieved {format_timestamp(retrieved)}"
-    info_col.caption(f"Comparison of {', '.join(briefing.successful_tickers)} · {when} · "
-                     f"price period {briefing.analysis_period}")
+    st.caption(f"Comparison of {', '.join(briefing.successful_tickers)} · {when} · "
+               f"price period {briefing.analysis_period}")
+    # Status and button on their own row, so neither is pushed off narrow screens.
+    status_col, button_col, _ = st.columns([1, 1, 1.4], vertical_alignment="center")
     if saved:
+        st.session_state.pop("close_note_dialog", None)  # nothing left to close once the page shows it saved
         status_col.markdown(chip("✓ Saved", "up", tooltip=saved), unsafe_allow_html=True)
     else:
         status_col.markdown(chip("● Unsaved discussion", "warn",
@@ -920,7 +938,7 @@ def history_section() -> None:
         client = c1.selectbox("Client", [ALL_CLIENTS] + list(options), format_func=lambda c: options.get(c, c),
                               key="history_client")
         company = c2.text_input("Company (ticker or name)", placeholder="e.g. NVDA or nvidia", key="history_company")
-        d1, d2, _ = st.columns([1, 1, 2])
+        d1, d2 = st.columns(2)  # wide enough for the whole date next to the clear (×) icon
         date_from = d1.date_input(f"Discussion from ({timezone_label()})", value=None)
         date_to = d2.date_input(f"Discussion to ({timezone_label()})", value=None)
         submitted = st.form_submit_button("Search")
@@ -984,9 +1002,11 @@ def history_section() -> None:
         render_historical(open_id)
 
 
-def render_saved_values(discussion_id: str) -> None:
-    """The per-company rows stored in the database: the values observed at the discussion."""
-    rows = database.get_companies(discussion_id)
+def render_saved_values(discussion_id: str, order: List[str]) -> None:
+    """The per-company rows stored in the database: the values observed at the discussion,
+    in the same company order as the comparison."""
+    rows = sorted(database.get_companies(discussion_id),
+                  key=lambda r: order.index(r["ticker"]) if r["ticker"] in order else len(order))
     if not rows:
         return
     frame = pd.DataFrame(
@@ -1039,7 +1059,7 @@ def render_historical(briefing_id: str) -> None:
     section("Discussion")
     render_note(briefing.note)
     section("Values at the time of the discussion")
-    render_saved_values(briefing_id)
+    render_saved_values(briefing_id, briefing.successful_tickers)
     section("Comparison as saved")
     render_comparison(briefing)
     section("Financial statements")

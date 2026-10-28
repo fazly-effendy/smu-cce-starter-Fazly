@@ -191,4 +191,68 @@ def test_sidebar_shows_version_and_server_start_time():
     app = AppTest.from_file(APP, default_timeout=60)
     app.run()
     captions = [c.value for c in app.sidebar.caption]
-    assert any(c.startswith("Nimbus 0.10.0") and "server started" in c for c in captions), captions
+    assert any(c.startswith("Nimbus 0.10.1") and "server started" in c for c in captions), captions
+
+
+# --- Step 12 QA run on Amazon RDS (29 Oct 2026, QA-1029) -----------------------------------------
+
+def test_dialog_save_closes_the_dialog_and_confirms():
+    """QA step 12: saving from the pop-up saved the record, but the dialog stayed open with no feedback.
+
+    The test harness reruns the whole page for a click inside a dialog (a browser reruns only the
+    dialog), so it cannot show the dialog closing. That part was checked in a browser on Streamlit
+    1.50 and 1.66 (dialog open before the fix, closed after). This test checks the save, the toast
+    and that no dialog is left."""
+    from test_app_workflow import generate, set_client, start_app
+
+    app = generate(set_client(start_app()), "AAPL, MSFT")
+    next(b for b in app.button if b.key == "header_save").click().run()  # no interests yet: dialog
+    key = app.session_state["briefing"].briefing_id
+    app.text_area(key=f"dlg_interests_{key}").set_value("From the dialog")
+    next(b for b in app.button if b.label == "💾 Save discussion"
+         and b.key not in ("notes_save", "header_save")).click().run()
+    assert not app.exception, app.exception
+    assert database.count_rows()["discussions"] == 1
+    assert "close_note_dialog" not in app.session_state  # the dialog consumed it and closed itself
+    assert not any(b.label == "💾 Save discussion" for b in app.button)  # no dialog or save buttons left
+    assert [t.value for t in app.toast] == ["Discussion with C-1001 saved"]
+
+
+def test_existing_client_keeps_its_name_on_later_discussions():
+    """QA step 12: the second discussion for QA-1029-A showed the ID without 'QA Test Client'."""
+    from test_app_workflow import fill_note, generate, save_in_tab, set_client, start_app
+
+    app = generate(set_client(start_app(), "QA-1", "Named Client"), "AAPL, MSFT")
+    fill_note(app)
+    save_in_tab(app)
+    second = AppTest.from_file(APP, default_timeout=60)
+    second.run()
+    second.selectbox(key="client_choice").set_value("QA-1").run()
+    generate(second, "AAPL, MSFT")  # a second, separate discussion for the same client
+    fill_note(second, "Semiconductors")
+    save_in_tab(second)
+    assert second.session_state["saved_note"].client_name == "Named Client"
+
+
+def test_saving_again_reports_the_stored_note_time():
+    """QA step 12: a repeated save click showed 'Note recorded 02:27' for a record stored at 02:26."""
+    unsaved = make_briefing()  # the app keeps this object (without a note) and passes it on every click
+    first = briefing_store.save_discussion(unsaved, make_note())
+    later_note = make_note()
+    later_note.created_at = "2026-10-24T13:01:00Z"
+    again = briefing_store.save_discussion(unsaved, later_note)
+    assert not again.created
+    assert again.briefing.note.created_at == first.briefing.note.created_at
+
+
+def test_values_at_the_time_follow_the_comparison_order():
+    """QA step 12: the saved-values table listed AMD before NVDA, the comparison NVDA first."""
+    briefing = make_briefing(("MSFT", "AAPL"))
+    briefing_store.save_discussion(briefing, make_note())
+    app = AppTest.from_file(APP, default_timeout=60)
+    app.run()
+    app.text_input(key="history_company").set_value("MSFT")
+    button(app, "Search").click().run()
+    button(app, "Open discussion").click().run()
+    table = next(t.value for t in app.table if "Stock price at discussion" in t.value.index)
+    assert list(table.columns) == ["MSFT", "AAPL"]
