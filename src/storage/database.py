@@ -112,17 +112,36 @@ discussion_companies = Table(
 
 _engines: Dict[str, Engine] = {}
 
+# Connections per app server to MySQL (RDS): 5 kept open, up to 5 more when busy. With
+# several servers (scaling), the total stays well under what a db.t3.micro allows.
+POOL_SIZE = 5
+MAX_OVERFLOW = 5
+POOL_RECYCLE_SECONDS = 1800  # replace idle connections before MySQL or the network drops them
+
+
+def engine_options(url: str) -> dict:
+    """Connection settings: a capped, self-healing pool for MySQL; defaults for SQLite."""
+    options = {"pool_pre_ping": True, "future": True}  # pre-ping: test a connection before use
+    if not url.startswith("sqlite"):
+        options.update(pool_size=POOL_SIZE, max_overflow=MAX_OVERFLOW, pool_recycle=POOL_RECYCLE_SECONDS)
+    return options
+
 
 def get_engine(url: Optional[str] = None) -> Engine:
     """One engine per database URL; tables are created on first use."""
     url = url or database_url()
     if url not in _engines:
-        engine = create_engine(url, pool_pre_ping=True, future=True)
+        engine = create_engine(url, **engine_options(url))
         if engine.dialect.name == "sqlite":
             @event.listens_for(engine, "connect")
             def _enable_foreign_keys(connection, _record):  # SQLite needs this per connection
                 connection.execute("PRAGMA foreign_keys=ON")
-        metadata.create_all(engine)
+        try:
+            metadata.create_all(engine)
+        except Exception:
+            # Two new servers starting together can both try to create the tables; the one
+            # that loses sees "already exists". Check again: this time they are there.
+            metadata.create_all(engine)
         _engines[url] = engine
     return _engines[url]
 
@@ -181,50 +200,59 @@ def insert_discussion(briefing: Briefing, filename: str, engine: Optional[Engine
         raise ValueError("Notes about the client's interests are required.")
     saved_at = _parse_dt(briefing.saved_at or briefing.created_at)
     retrieved = [c.retrieved_at for c in briefing.companies if c.retrieved_at] or [briefing.created_at]
+    # Up to two attempts: if another app server creates the same new client at the same moment,
+    # the first attempt fails on the duplicate client and is rolled back completely; the
+    # second finds the client and links the discussion to it.
     try:
-        with engine.begin() as connection:  # commits on success, rolls back on any error
-            _ensure_client(connection, client_id, note.client_name, saved_at)
-            connection.execute(discussions.insert().values(
-                discussion_id=briefing.briefing_id,
-                client_id=client_id,
-                discussion_date=_parse_date(note.discussion_date) or to_local(saved_at).date(),
-                created_at=saved_at,
-                data_retrieved_at=_parse_dt(min(retrieved)),
-                comparison_period=briefing.analysis_period,
-                tickers=", ".join(briefing.successful_tickers)[:255],
-                client_interests=note.client_interests.strip(),
-                notes=(note.notes or "").strip() or None,
-                follow_up_actions=(note.follow_up_actions or "").strip() or None,
-                next_review_date=_parse_date(note.next_review_date),
-                other_notes=(note.free_text or "").strip() or None,
-                filename=filename,
-                snapshot_json=json.dumps(briefing.to_dict(), ensure_ascii=False),
-                schema_version=briefing.schema_version,
-                app_version=briefing.app_version,
-            ))
-            connection.execute(discussion_companies.insert(), [
-                {
-                    "discussion_id": briefing.briefing_id,
-                    "ticker": c.ticker,
-                    "company_name": (c.name or c.ticker)[:200],
-                    "stock_price": c.last_close,
-                    "price_date": _parse_date(c.last_close_date),
-                    "currency": c.currency,
-                    "revenue_growth": c.ratios.get("revenue_growth"),
-                    "net_margin": c.ratios.get("net_margin"),
-                    "operating_margin": c.ratios.get("operating_margin"),
-                    "debt_to_equity": c.ratios.get("debt_to_equity"),
-                    "fiscal_year_end": _parse_date(c.fiscal_year_end),
-                    "source": c.source_name[:100],
-                    "retrieved_at": _parse_dt(c.retrieved_at),
-                }
-                for c in briefing.companies
-            ])
+        _insert_once(engine, briefing, client_id, note, saved_at, retrieved, filename)
     except IntegrityError:
         if discussion_exists(briefing.briefing_id, engine):
-            return False
-        raise
+            return False  # already saved (e.g. a repeated click)
+        _insert_once(engine, briefing, client_id, note, saved_at, retrieved, filename)  # second attempt
     return True
+
+
+def _insert_once(engine: Engine, briefing: Briefing, client_id: str, note, saved_at: datetime,
+                 retrieved: List[str], filename: str) -> None:
+    """One transaction: the client (if new), the discussion and its company rows."""
+    with engine.begin() as connection:  # commits on success, rolls back on any error
+        _ensure_client(connection, client_id, note.client_name, saved_at)
+        connection.execute(discussions.insert().values(
+            discussion_id=briefing.briefing_id,
+            client_id=client_id,
+            discussion_date=_parse_date(note.discussion_date) or to_local(saved_at).date(),
+            created_at=saved_at,
+            data_retrieved_at=_parse_dt(min(retrieved)),
+            comparison_period=briefing.analysis_period,
+            tickers=", ".join(briefing.successful_tickers)[:255],
+            client_interests=note.client_interests.strip(),
+            notes=(note.notes or "").strip() or None,
+            follow_up_actions=(note.follow_up_actions or "").strip() or None,
+            next_review_date=_parse_date(note.next_review_date),
+            other_notes=(note.free_text or "").strip() or None,
+            filename=filename,
+            snapshot_json=json.dumps(briefing.to_dict(), ensure_ascii=False),
+            schema_version=briefing.schema_version,
+            app_version=briefing.app_version,
+        ))
+        connection.execute(discussion_companies.insert(), [
+            {
+                "discussion_id": briefing.briefing_id,
+                "ticker": c.ticker,
+                "company_name": (c.name or c.ticker)[:200],
+                "stock_price": c.last_close,
+                "price_date": _parse_date(c.last_close_date),
+                "currency": c.currency,
+                "revenue_growth": c.ratios.get("revenue_growth"),
+                "net_margin": c.ratios.get("net_margin"),
+                "operating_margin": c.ratios.get("operating_margin"),
+                "debt_to_equity": c.ratios.get("debt_to_equity"),
+                "fiscal_year_end": _parse_date(c.fiscal_year_end),
+                "source": c.source_name[:100],
+                "retrieved_at": _parse_dt(c.retrieved_at),
+            }
+            for c in briefing.companies
+        ])
 
 
 def search_discussions(

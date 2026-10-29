@@ -11,7 +11,7 @@ exactly as it was.
 
 Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 
-> **Status (v0.10.2).** Implements the instructor's feedback of 27 Oct 2026:
+> **Status (v0.10.3).** Implements the instructor's feedback of 27 Oct 2026:
 > client-discussion snapshots (Client ID, ticker, discussion date, stock price
 > at the time, client's interests) stored in `clients`, `discussions` and
 > `discussion_companies`, retrievable by client and by company. The
@@ -19,8 +19,9 @@ Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 > (`tests/test_app_workflow.py`). **Step 12 (the same on Amazon RDS) passed in
 > the AWS Sandbox on 29 Oct 2026 with v0.10.0, commit `02c72aa`**
 > ([evidence](docs/evidence/2026-10-29-step12/README.md)). v0.10.1 (fixes from
-> that run) and v0.10.2 (news summaries from Yahoo's RSS feed) are tested
-> locally and not yet deployed. The environment is created by CloudFormation
+> that run), v0.10.2 (news summaries from Yahoo's RSS feed) and v0.10.3
+> (database settings for several app servers) are tested locally and not yet
+> deployed. The environment is created by CloudFormation
 > (VPC, EC2, RDS). Auto scaling (Feature 6) follows the Week 9 lesson; see
 > [Project status](#project-status).
 
@@ -384,6 +385,9 @@ They cover:
 - rollback when the database fails; invalid client IDs and missing interests rejected;
 - search by client, company (ticker or name) and date;
 - reopening from the database without calling Yahoo, even without the file;
+- several app servers on one database (`tests/test_multi_server.py`): two
+  servers saving the same new client at once both succeed, and each server's
+  MySQL connections are capped;
 - `tests/test_app_workflow.py::test_instructor_acceptance_test`, which drives
   the real Streamlit app through the instructor's acceptance test, steps 1–11:
   client → two tickers → generate → prices side by side → revenue growth,
@@ -402,7 +406,7 @@ each test):
 NIMBUS_TEST_DATABASE_URL='mysql+pymysql://<user>:<password>@127.0.0.1:3306/nimbus_test' python -m pytest
 ```
 
-All 130 tests pass on MariaDB 10.11 (MySQL-compatible) through PyMySQL.
+All 133 tests pass on MariaDB 10.11 (MySQL-compatible) through PyMySQL.
 `python scripts/check_database.py` checks that the configured database is
 reachable and its tables exist, printing only the host and row counts, never
 the password.
@@ -456,8 +460,10 @@ In short:
    `scripts/nimbus-stack.yaml`, name the stack `nimbus`, type a new `DBPassword`
    (letters and digits, never a real password), and set `GitCommit` to the exact commit
    to deploy (e.g. `e49a2c6`; empty = latest on `GitBranch`, default `main`). The deployed
-   commit is shown in the app's sidebar and in the EC2 system log. To deploy new code,
-   delete and recreate the stack: user data runs only when the instance is created.
+   commit is shown in the app's sidebar and in the EC2 system log. Leave
+   `InstanceProfileName` empty (no IAM role). **New code needs a new stack, and deleting
+   the stack deletes every saved discussion;** **Update stack** does not change the code.
+   See [Keeping saved discussions](docs/aws-deployment.md#keeping-saved-discussions).
 3. Wait for `CREATE_COMPLETE` (about 15–20 minutes, mostly RDS). It is only reported after
    Nimbus has connected to RDS and answers its health check.
 4. Open the `NimbusUrl` output (http://…:8501).
@@ -519,16 +525,21 @@ Nimbus has no logins of its own (see *Known limitations* and *Future work*).
 | Relationship manager | The Nimbus web page only | Compare, save, search and reopen discussions. No AWS access | As designed. No app logins (a known limitation) |
 | Developer | AWS console through company single sign-on (an IAM role) | Read CloudFormation events and the EC2 system log; deploy a test stack | Not created: the Sandbox has one shared lab login, and the course does not require staff IAM accounts |
 | Administrator | AWS console through single sign-on, with multi-factor sign-in | Create and delete stacks; manage RDS, security groups and IAM | Not created: same reason |
-| App server (EC2) | Instance profile `LabInstanceProfile` (role `LabRole`) | Nothing Nimbus uses: the app reaches RDS with a database username and password, and calls no AWS APIs | **Implemented** in `scripts/nimbus-stack.yaml` (`InstanceProfileName`) |
+| App server (EC2) | **No IAM role** (`InstanceProfileName` empty by default) | No AWS API access at all. The app reaches RDS with a database username and password over the network, and Yahoo over HTTPS | **Implemented** in `scripts/nimbus-stack.yaml` |
 | Database (RDS) | No AWS identity | Accepts connections on port 3306 only from the app server's security group; no public address | **Implemented** |
 
-**Why `LabInstanceProfile`:** it is the Sandbox's ready-made role for EC2, and
-AWS Academy Sandboxes normally do not permit creating IAM roles, users or groups
-(to be confirmed in our Sandbox before the final deployment). `LabRole` can
-do more than Nimbus needs; least privilege in production would mean no role,
-or a role narrowed to what is used (for example reading the database password
-from Secrets Manager). Leaving `InstanceProfileName` empty deploys with no role,
-and Nimbus works the same.
+**Why the app server has no IAM role (least privilege):** an IAM role gives a
+server AWS credentials, and Nimbus makes no AWS API calls that need them. RDS
+is reached with a database login, not IAM; and `cfn-signal`, which reports
+setup success to CloudFormation, works without a role: the 27 and 29 Oct
+deployments had none and received the SUCCESS signal (EC2 instance summary
+*IAM role: –* in
+[B11a](docs/evidence/2026-10-29-step12/B11a_reboot_initiated.png)). Attaching
+the Sandbox's `LabInstanceProfile` would only add broad permissions that
+nothing uses. If a later change needs AWS access (for example reading the
+database password from Secrets Manager, see *Future work*), the template can
+attach an instance profile through `InstanceProfileName`; in production that
+role would be narrowed to exactly that access.
 
 Other controls: the database is in private subnets with no internet route;
 SSH is closed by default; the database password is a `NoEcho` parameter and is
@@ -589,9 +600,6 @@ never in the repository, the template or the logs (details in
   time low; production would use Multi-AZ and backups.
 - **No user accounts:** everyone using an instance sees the same clients and
   history. A design for RM logins is under *Future work*.
-- **The app server's IAM role is broader than needed.** The Sandbox's `LabRole`
-  is used because Academy Sandboxes normally do not permit creating a narrower role; Nimbus does
-  not use its credentials. See *Security and access*.
 - **Company search** runs when you press Enter, not on every keystroke
   (true as-you-type search would need a third-party Streamlit component and a
   Yahoo call per key press). Results are cached for a day.

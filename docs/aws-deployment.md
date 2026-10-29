@@ -47,7 +47,6 @@ flowchart LR
 | Database security group | `nimbus-db-sg` | Port 3306 **only from `nimbus-app-sg`**; nothing else can connect |
 | DB subnet group | `nimbus-db-subnets` | Places RDS in the two private subnets (RDS requires two AZs) |
 | RDS for MySQL (db.t3.micro, 20 GB) | `nimbus-db` | Database `nimbus`: tables `clients`, `discussions`, `discussion_companies` (created by the app on first start). **Not publicly accessible** |
-| IAM instance profile (existing, not created) | `LabInstanceProfile` (role `LabRole`) | Attached to the app server. Provided by the Sandbox; Nimbus uses no AWS credentials. See the README, *Security and access* |
 | EC2 instance (t2.micro, Amazon Linux 2023) | `nimbus-app` | Clones the repo, installs the exact versions in `requirements-lock.txt` in a venv, connects to RDS, runs Nimbus as the `nimbus` systemd service |
 
 **How "complete" is decided:** CloudFormation creates RDS first, because the
@@ -106,15 +105,14 @@ environment, not to this stack.
    - `GitCommit`: **for a recorded deployment (evidence, final demo), the exact
      commit to deploy**, e.g. `e49a2c6`, copied from `git log --oneline -1` or
      GitHub. Leave it empty to deploy the latest commit of `GitBranch`.
-   - `InstanceProfileName`: leave `LabInstanceProfile`. If the stack fails
-     because the Sandbox has no such profile or will not let you use it (see
-     *Troubleshooting*), clear it to launch the server with no IAM role.
+   - `InstanceProfileName`: leave **empty** (no IAM role; Nimbus needs no AWS
+     credentials). See the README, *Security and access*.
    - Leave the others at their defaults (`DBUsername` = `nimbusadmin`).
 
-**Deploying new code:** EC2 user data runs only once, when the instance is
-first created. Changing `GitBranch`, `GitCommit` or the template on a running
-stack does **not** update the app on the existing instance. To deploy a new
-version, delete the stack and create it again with the new `GitCommit`.
+**Deploying new code, and what it does to saved discussions:** read
+[Keeping saved discussions](#keeping-saved-discussions) first. In short,
+the only way to deploy a new commit is to delete the stack and create it
+again, and that **deletes every saved discussion**.
 6. Click **Next** twice, then **Submit**. It takes about 15–20 minutes: RDS
    takes about 10 minutes, then EC2 setup about 5–10 minutes.
 
@@ -157,10 +155,9 @@ tab with a visible password (it shows `****`, which is fine).
    after the reboot (proof that the server really restarted), the History caption shows
    the same counts, and the discussion still opens with the same values.
 7. **VPC → Route tables → nimbus-rtb-private → Routes:** only the `local` route.
-8. **IAM:** **EC2 → nimbus-app → Security** tab: *IAM Role: LabRole* (or *–* if
-   `InstanceProfileName` was left empty), and the stack output `InstanceProfile`.
-   Then **IAM → Roles → LabRole → Trust relationships**: the trusted entity
-   includes `ec2.amazonaws.com`.
+8. **IAM:** **EC2 → nimbus-app**, instance summary: *IAM role: –* (no role, by
+   design), and the stack output `InstanceProfile` = `none`. The stack still
+   received the SUCCESS signal, which shows setup needs no AWS credentials.
 
 Optional, for a viva question on SQL: to run SQL directly against RDS, set
 `AllowedSshCidr` to your own IP followed by `/32` when creating the stack, then
@@ -190,7 +187,7 @@ Close SSH again afterwards. This step is not needed for the demo.
 | `CREATE_FAILED` on `AppServer` (other reason) | **EC2 → nimbus-app → Actions → Monitor and troubleshoot → Get system log**; look for lines after `nimbus-setup` / `fatal` / `ERROR`. |
 | `Remote branch … not found` | The `GitBranch` parameter does not exist on GitHub; push it or use `main`. |
 | `Commit … not found in the repository` (Events reason or system log) | The `GitCommit` value is wrong or not pushed yet. Check `git log --oneline -1` and that it is on GitHub, then delete and recreate the stack. |
-| `CREATE_FAILED` on `AppServer`: *Value (LabInstanceProfile) for parameter iamInstanceProfile.name is invalid*, or *not authorized to perform: iam:PassRole* | This Sandbox has no `LabInstanceProfile`, or does not let you use it. Delete the stack and create it again with `InstanceProfileName` empty (no IAM role; Nimbus does not need one). |
+| `CREATE_FAILED` on `AppServer`: *… iamInstanceProfile.name is invalid*, or *not authorized to perform: iam:PassRole* | Only if `InstanceProfileName` was set: the profile does not exist or may not be used. Create the stack again with it empty (the default). |
 | `DBInstanceIdentifier … already exists` | A `nimbus-db` from an earlier stack is still there: wait until it is deleted, or use another stack name. |
 | History tab says *Cannot reach the briefing database* | RDS stopped or still starting (e.g. after the Sandbox was resumed). Wait until *Available*, then reload. |
 | Page does not load | Use `http://`, not `https://`; check the `nimbus-app-sg` inbound rule for 8501. |
@@ -203,14 +200,45 @@ After starting a new session, check that **EC2 → nimbus-app** is *Running* and
 **RDS → nimbus-db** is *Available*, and start them if not (database first). A
 stopped-and-started instance gets a new public address, so read the address
 again from **EC2 → nimbus-app → Public IPv4 DNS** and add `:8501` (the stack
-output keeps the old one). Saved briefings and the database survive.
+output keeps the old one). Saved discussions and the database survive.
+
+## Keeping saved discussions
+
+Saved discussions live in RDS (with Markdown copies on the instance's disk).
+Both belong to the stack:
+
+- **Deleting the stack deletes them.** The database is set to
+  `DeletionPolicy: Delete` with no final snapshot (a Sandbox choice: no
+  leftover snapshots and their storage). The instance's disk goes too.
+- **Updating the stack does not deploy new code.** EC2 user data runs only
+  when the instance is first created. If you change `GitCommit`, `GitBranch`
+  or the user data and choose **Update stack**, CloudFormation stops and starts
+  the instance and reports `UPDATE_COMPLETE`, but the app on it is still the
+  old commit. Do not use **Update stack** to deploy code; the sidebar and the
+  system log would show the old commit.
+- **So a new commit means a new stack with an empty database.**
+
+How we work with this:
+
+1. **Create the final stack once,** on the submission commit (`GitCommit`),
+   then record the final evidence and give the demo on that same stack.
+   Between Sandbox sessions, resume it (see *Sandbox sessions*); do not
+   recreate it.
+2. **If code must change after that,** record the evidence you still need
+   first (screenshots keep their date and commit), then delete and recreate
+   the stack, and enter the demo clients again from the demo flow. All
+   clients are fictional, so nothing real is lost.
+3. **With scaling (Stage 3, planned):** if servers are launched by an Auto
+   Scaling group, a new commit could be rolled out by replacing the servers
+   while RDS stays. This is to be designed with the scaling lesson.
 
 ## Clean up after testing
 
 **CloudFormation → nimbus → Delete.** This removes every resource listed above,
 including the database (no final snapshot is kept), the instance's disk and
-every saved briefing. If **Delete** is greyed out, select the stack first, or
-wait for any operation in progress to finish.
+every saved discussion (see *Keeping saved discussions*). If **Delete** is
+greyed out, select the stack first, or wait for any operation in progress to
+finish.
 
 ## Design choices to be able to explain
 
@@ -233,14 +261,12 @@ wait for any operation in progress to finish.
 - **Sandbox-sized database:** `db.t3.micro`, 20 GB gp2, single-AZ, no automated
   backups, deleted with the stack: low cost and faster to create. Production
   would use Multi-AZ, backups and deletion protection.
-- **IAM: the Sandbox's instance profile, with nothing used from it:** the app
-  server gets `LabInstanceProfile` (role `LabRole`), the course's mechanism for
-  EC2 roles. Nimbus calls no AWS APIs: it reaches RDS with a database username
-  and password and Yahoo over HTTPS, so it never uses the role's credentials.
-  `LabRole` allows more than Nimbus needs, and Academy Sandboxes normally do
-  not let us create a narrower role, so this is a classroom limitation. In production the
-  role would be removed, or narrowed to what is used (e.g. Secrets Manager for
-  the database password). The access model for people is in the README,
+- **IAM: no role on the app server (least privilege):** Nimbus calls no AWS
+  APIs. It reaches RDS with a database username and password and Yahoo over
+  HTTPS, and `cfn-signal` needs no credentials, so a role would only add
+  unused permissions. Lesson 7 lists the IAM role among EC2 launch settings;
+  we set it deliberately to none. `InstanceProfileName` can attach one if a
+  later change needs AWS access. The access model for people is in the README,
   *Security and access*.
 - **SSH closed by default:** troubleshooting uses the EC2 system log (as in
   Lesson 7). SSH can be opened to a single IP with `AllowedSshCidr`.
@@ -254,5 +280,8 @@ wait for any operation in progress to finish.
   copy, and the download is rebuilt from the snapshot when that server lacks the
   file. Still open for Stage 3, after the Week 9 lesson: a load balancer and an
   Auto Scaling group; sticky sessions (each user's unsaved comparison lives in one
-  server's memory, so it is lost if that server is replaced); and database
-  connection limits.
+  server's memory, so it is lost if that server is replaced). Already done
+  in the app for several servers (v0.10.3, `src/storage/database.py`): each
+  server keeps at most 10 MySQL connections (well under a `db.t3.micro`'s
+  limit, about 60–80), and two servers saving the same new client at once
+  both succeed instead of one failing on the duplicate client.

@@ -28,13 +28,13 @@ Parameters:
       The commit must be on GitBranch. Setup fails, and the stack shows CREATE_FAILED, if it is not found.
   InstanceProfileName:
     Type: String
-    Default: LabInstanceProfile
+    Default: ""
     AllowedPattern: "^$|^[A-Za-z0-9+=,.@_-]{1,128}$"
     ConstraintDescription: Empty, or an existing instance profile name (e.g. LabInstanceProfile).
     Description: >
-      IAM instance profile for the app server. The AWS Academy Sandbox provides LabInstanceProfile
-      (role LabRole); Academy Sandboxes normally block creating a narrower role. Nimbus itself calls no AWS
-      APIs. Leave empty to launch the server with no IAM role.
+      Leave empty (recommended): the app server gets no IAM role, because Nimbus calls no AWS APIs
+      (least privilege). Only set an existing instance profile, e.g. the Sandbox's LabInstanceProfile,
+      if a later change needs AWS credentials on the server.
   ImageId:
     Type: AWS::EC2::Image::Id
     Default: ami-0fef201115eefe936
@@ -288,7 +288,7 @@ Resources:
       ImageId: !Ref ImageId
       InstanceType: !Ref InstanceType
       KeyName: !Ref KeyName
-      # IAM: the Sandbox's instance profile (see InstanceProfileName), or none.
+      # IAM: none by default (Nimbus needs no AWS credentials); see InstanceProfileName.
       IamInstanceProfile: !If [HasInstanceProfile, !Ref InstanceProfileName, !Ref "AWS::NoValue"]
       SubnetId: !Ref PublicSubnetA
       SecurityGroupIds: [!Ref AppSecurityGroup]
