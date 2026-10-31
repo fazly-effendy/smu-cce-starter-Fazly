@@ -40,6 +40,7 @@ from config import (
     deployed_commit,
     describe_database_url,
     local_today,
+    process_started_at,
     server_name,
     timezone_label,
     to_local,
@@ -527,9 +528,13 @@ def render_article_list(articles) -> str:
 
 @st.cache_resource
 def server_started_at() -> str:
-    """When this server process started (once per process). After an EC2 reboot this changes,
-    which shows in the sidebar that the app really restarted."""
-    return utc_now_iso()
+    """When this server's app process started. After a reboot, or on a new server added by
+    scaling, this changes, which shows in the sidebar that the app really restarted.
+
+    Read from the operating system on Linux (EC2). Before v0.11.1 it was the time of the
+    first page view, which could be much later (QA 31 Oct 2026, D-4)."""
+    started = process_started_at()
+    return started.isoformat().replace("+00:00", "Z") if started else utc_now_iso()
 
 
 def sidebar() -> None:
@@ -681,6 +686,9 @@ def client_picker() -> None:
     choice_col, id_col, name_col = st.columns([1.6, 1, 1.4], vertical_alignment="bottom")
     choice = choice_col.selectbox("Client", choices, key="client_choice", format_func=lambda c: options.get(c, c),
                                   help="Choose a client you have met before, or New client to enter a client ID.")
+    # The warning goes below the row, not inside the Client ID column: inside it, the
+    # bottom-aligned row shifted and the fields no longer lined up (QA 31 Oct 2026, D-5).
+    warning_slot = st.empty()
     if choice == NEW_CLIENT:
         id_col.text_input("Client ID *", key="new_client_id", placeholder="e.g. C-1001", max_chars=32,
                           help="Letters, digits, - or _. Stored in capitals.")
@@ -690,7 +698,7 @@ def client_picker() -> None:
             try:
                 database.normalise_client_id(typed)
             except ValueError as exc:
-                id_col.caption(f"⚠️ {exc}")
+                warning_slot.caption(f"⚠️ {exc}")
 
 
 def generate_section() -> None:

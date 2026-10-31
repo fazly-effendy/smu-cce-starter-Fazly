@@ -81,3 +81,15 @@ def test_new_code_replaces_servers_one_at_a_time_and_waits_for_each(resources):
     user_data = resources["AppLaunchTemplate"]["Properties"]["LaunchTemplateData"]["UserData"]["Fn::Base64"]["Fn::Sub"]
     assert "--resource AppAutoScalingGroup" in user_data and "${GitCommit}" in user_data
     assert "set +x" in user_data.split("NIMBUS_DATABASE_URL")[0]  # tracing off before the password
+
+
+def test_every_server_runs_the_same_pinned_commit():
+    """QA 31 Oct 2026, D-1: with GitCommit empty, servers added later would clone the newest
+    commit, so different servers behind the load balancer could run different code."""
+    parameters = yaml.load(TEMPLATE.read_text(encoding="utf-8"), Loader=_CfnLoader)["Parameters"]
+    commit = parameters["GitCommit"]
+    assert "Default" not in commit  # must be given when the stack is created
+    import re
+
+    pattern = re.compile(commit["AllowedPattern"])
+    assert not pattern.match("") and pattern.match("ff18611")

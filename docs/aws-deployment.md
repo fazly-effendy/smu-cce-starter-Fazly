@@ -9,7 +9,7 @@ The deployment was built in stages. Each stage is the same template, extended:
 |---|---|---|
 | 1 | VPC (2 public + 2 private subnets), security group, EC2 app server installed by user data, systemd service, health-checked `CREATE_COMPLETE` | ✅ Deployed in the Sandbox |
 | 2 | Amazon RDS for MySQL in the private subnets; database security group that accepts MySQL only from the app servers; app connected to RDS | ✅ Deployed and verified (25, 27 and 29 Oct 2026), including the reboot test. Evidence: [`2026-10-27-stage2`](evidence/2026-10-27-stage2/README.md), [`2026-10-29-step12`](evidence/2026-10-29-step12/README.md) |
-| 3 | **Automatic scaling (Feature 6, Lesson 9: AACF Module 10 and Lab 6):** Application Load Balancer, launch template, Auto Scaling group across two Availability Zones, target tracking on CPU and on requests per server, CloudWatch alarms | 🛠️ In the template from v0.11.0; checked with `cfn-lint`. **Not yet tested on AWS** |
+| 3 | **Automatic scaling (Feature 6, Lesson 9: AACF Module 10 and Lab 6):** Application Load Balancer, launch template, Auto Scaling group across two Availability Zones, target tracking on CPU and on requests per server, CloudWatch alarms | ✅ Verified on AWS on 31 Oct 2026 with v0.11.0 (`ff18611`): automatic scale-out 1 → 3 and scale-in 3 → 1 on the request alarms, any server reopens any discussion, a terminated server replaced automatically, data intact. [Evidence](evidence/2026-10-31-scaling/README.md). Not yet tested: a code update by rolling update |
 
 ## Architecture (Stage 3)
 
@@ -43,6 +43,13 @@ flowchart LR
 
 ## What the stack creates
 
+Names are what the console's **Name** column shows (the resource's `Name` tag). Where
+CloudFormation generates the resource's own name, it is `nimbus-<Resource>-<random>`, for
+example the security group `nimbus-DbSecurityGroup-7SBoU3521ejt`, whose Name tag is
+`nimbus-db-sg`. Renaming such resources in the template would make CloudFormation replace
+them; for the DB subnet group that would replace the database, so the names are left as
+generated.
+
 | Resource | Name | Purpose |
 |---|---|---|
 | VPC 10.0.0.0/16 | `nimbus-vpc` | Private network for Nimbus |
@@ -58,7 +65,7 @@ flowchart LR
 | Launch template | `nimbus-app` | How every app server is built: Amazon Linux 2023, t2.micro, no IAM role, `nimbus-app-sg`, and the user data that installs Nimbus |
 | Auto Scaling group | `nimbus-app-asg` | Keeps 1–3 app servers (`MinServers`, `MaxServers`) across both public subnets; replaces a server the load balancer reports unhealthy |
 | Scaling policies (2) | `CpuScalingPolicy`, `RequestScalingPolicy` | Target tracking: average CPU 60% (as in Lab 6) and 1,000 load-balancer requests per server per minute. Each creates its own CloudWatch alarms |
-| DB subnet group | `nimbus-db-subnets` | Places RDS in the two private subnets (RDS requires two AZs) |
+| DB subnet group | `nimbus-dbsubnetgroup-…` (Name tag `nimbus-db-subnets`) | Places RDS in the two private subnets (RDS requires two AZs) |
 | RDS for MySQL (db.t3.micro, 20 GB) | `nimbus-db` | Database `nimbus`: tables `clients`, `discussions`, `discussion_companies` (created by the app on first start). **Not publicly accessible** |
 
 **How "complete" is decided:** CloudFormation creates RDS first, because the
@@ -73,10 +80,12 @@ reached the database. It is still not the whole proof; the evidence below is.
 **How automatic scaling works:** target tracking keeps a metric near a target,
 like a thermostat. Each policy creates two CloudWatch alarms:
 - **Scale out:** if average CPU stays above 60%, or the load balancer sends a
-  server more than 1,000 requests a minute, for about 3 minutes, the Auto
-  Scaling group launches another server. That server installs itself from the
-  launch template, which takes about 6–10 minutes. The load balancer sends it
-  traffic once its health check passes.
+  server more than 1,000 requests a minute, for 3 minutes in a row, the Auto
+  Scaling group adds servers. Target tracking adds **as many as the load needs,
+  up to `MaxServers`**: on 31 Oct, about 6,200 requests a minute against a target
+  of 1,000 took it straight from 1 to 3 servers. Each new server installs itself
+  from the launch template and joins the load balancer once its health check
+  passes: within 6 minutes on 31 Oct.
 - **Scale in:** when **both** metrics have stayed well below target for about
   15 minutes, a server is removed. The group never goes below `MinServers` or
   above `MaxServers`.
@@ -92,8 +101,15 @@ only ever displays the database host, never the URL with the password.
 
 ## Verified on AWS (Stage 2, single server)
 
-These checks used the Stage 2 template (one EC2 instance, no load balancer).
-They remain valid for the network, RDS and app set-up, which Stage 3 keeps.
+**31 Oct 2026, Stage 3** (commit `ff18611`, v0.11.0; independent check, sections
+A–D below): deployment and security, the app through the load balancer (9 of 9),
+automatic scale-out and scale-in, and self-healing all passed. The findings
+(the stack had been created with `GitCommit` empty; four documentation or
+cosmetic points) are fixed in v0.11.1. [Evidence](evidence/2026-10-31-scaling/README.md).
+
+The earlier checks below used the Stage 2 template (one EC2 instance, no load
+balancer). They remain valid for the network, RDS and app set-up, which Stage 3
+keeps.
 
 - **25 Oct 2026:** an independent audit (no changes made) confirmed:
   - `CREATE_COMPLETE` with the SUCCESS signal;
@@ -125,16 +141,19 @@ the AWS Academy lab environment, not to this stack.
      not reuse any real password. Nobody needs to see it again: the app reads
      it from the server.
    - `GitBranch`: `main`.
-   - `GitCommit`: **the exact commit to deploy**, e.g. `1a14188`. Leave it
-     empty only for a quick test (it then takes the latest commit of
-     `GitBranch`, and each later server could get a newer one).
-   - `InstanceProfileName`: leave **empty** (no IAM role; see *Troubleshooting*
-     if the stack waits for a signal that never arrives).
+   - `GitCommit` (**required**): the exact commit to deploy, from
+     `git log --oneline -1`, e.g. `ff18611`. Every server, including those the
+     Auto Scaling group adds later, runs this commit. (Before v0.11.1 it could be
+     left empty; servers added later would then have cloned whatever was newest
+     on GitHub, so two servers could run different code.)
+   - `InstanceProfileName`: leave **empty** (no IAM role; confirmed to work
+     with the Auto Scaling group on 31 Oct).
    - `MinServers` 1, `MaxServers` 3, `CpuTargetPercent` 60,
      `RequestsPerServerTarget` 1000: keep the defaults.
    - Leave the others at their defaults (`DBUsername` = `nimbusadmin`).
 6. Click **Next** twice, then **Submit**. It takes about 20–25 minutes: RDS
-   takes about 10 minutes, then the first server about 6–10 minutes.
+   takes about 6–10 minutes, then the first server about 2–5 minutes (8 minutes
+   in total on 31 Oct).
 7. Open the `NimbusUrl` output: `http://nimbus-alb-….elb.amazonaws.com`
    (http, not https, and no port number).
 
@@ -158,7 +177,8 @@ tab with a visible password (it shows `****`, which is fine).
    `DatabaseEndpoint`, `InstanceProfile` = `none`.
 4. **RDS → Databases → nimbus-db → Connectivity & security:**
    - *Publicly accessible: No*;
-   - VPC `nimbus-vpc`, subnet group `nimbus-db-subnets`;
+   - VPC `nimbus-vpc`; subnet group `nimbus-dbsubnetgroup-…` (generated name; its
+     Name tag is `nimbus-db-subnets`);
    - security group `nimbus-db-sg`.
 5. **Security groups, inbound rules:**
    - `nimbus-alb-sg`: 80 from 0.0.0.0/0;
@@ -192,10 +212,13 @@ Plan about 40–50 minutes inside one Sandbox session.
 1. **Before:**
    - **EC2 → Auto Scaling groups → nimbus-app-asg:** *Desired 1, Min 1, Max 3*;
    - **Target groups → nimbus-app-tg → Targets:** 1 *healthy*;
-   - **CloudWatch → Alarms:** four `TargetTracking-nimbus-app-asg-…` alarms, all *OK*
-     (or *Insufficient data* at first).
+   - **CloudWatch → Alarms:** four `TargetTracking-nimbus-app-asg-…` alarms. At rest
+     the two *AlarmHigh* alarms are *OK* and the two *AlarmLow* (scale-in) alarms
+     are **In alarm**. That is normal: load is low, but the group is already at its
+     minimum, so there is nothing to remove.
 2. **Create load** for about 10 minutes, so requests per server go above 1,000 a
-   minute. Use either:
+   minute. 20 loops gave about 6,200 requests a minute on 31 Oct (scales 1 → 3).
+   For a gentler 1 → 2, use about 4 loops (about 1,200–1,500 a minute). Use either:
    - **CloudShell** (console toolbar, if the Sandbox allows it):
      ```bash
      URL=http://nimbus-alb-….elb.amazonaws.com   # the NimbusUrl output
@@ -209,13 +232,15 @@ Plan about 40–50 minutes inside one Sandbox session.
        while ((Get-Date) -lt $end) { try { Invoke-WebRequest $u -UseBasicParsing | Out-Null } catch {} } } }
      $jobs | Wait-Job | Remove-Job
      ```
-3. **Scale-out evidence** (about 3–5 minutes after the load starts, then 6–10
-   minutes for the new server):
+3. **Scale-out evidence** (about 4–6 minutes after the load starts, then up to 6
+   minutes for the new servers):
    - **CloudWatch → Alarms:** the request policy's *AlarmHigh* alarm in **In alarm**;
-   - **Auto Scaling group → Activity:** *"Launching a new EC2 instance … in
-     response to an alarm"*, with *Desired 2*;
-   - **Target group → Targets:** 2 *healthy*, in different Availability Zones
-     when the group placed them so;
+   - **Auto Scaling group → Activity:** *"Launching a new EC2 instance"*, with the
+     cause *"… a monitor alarm TargetTracking-nimbus-app-asg-AlarmHigh-… in state
+     ALARM triggered policy nimbus-RequestScalingPolicy-… changing the desired
+     capacity from 1 to 3"* (or 1 to 2 with the lighter load);
+   - **Target group → Targets:** all servers *healthy*, spread across the two
+     Availability Zones;
    - **CloudWatch → Metrics → ApplicationELB → RequestCountPerTarget:** the graph
      above 1,000.
 4. **Any server, same data:**
@@ -225,7 +250,8 @@ Plan about 40–50 minutes inside one Sandbox session.
      and note.
 5. **Scale in:** stop the load (Ctrl+C, or wait for the 10 minutes to end).
    About 15–20 minutes later:
-   - **Activity:** *"Terminating EC2 instance … in response to an alarm"*;
+   - **Activity:** *"Terminating EC2 instance"*, cause *"… AlarmLow-… in state
+     ALARM triggered policy … changing the desired capacity from 3 to 2"*, then 2 to 1;
    - *Desired 1*;
    - the saved discussions are all still there.
 6. **Label manual actions as manual.** Any change you make yourself, for
@@ -238,8 +264,11 @@ Terminate** (this deletes only that server; RDS and the saved discussions
 stay).
 - The load balancer reports it unhealthy.
 - **Activity** shows the group launching a replacement.
-- About 10 minutes later, `NimbusUrl` works again: the sidebar shows a new server
-  name and a new *server started* time, and the saved discussion reopens unchanged.
+- The load balancer removes the server at once and shows *503 Service Temporarily
+  Unavailable* until the replacement is healthy.
+- About 4 minutes later (31 Oct), `NimbusUrl` works again: the sidebar shows a new
+  server name and a new *server started* time, and the saved discussion reopens
+  unchanged.
 
 Only do this with the team's agreement: the app is unavailable for those minutes.
 
@@ -278,7 +307,7 @@ Close SSH again afterwards. This step is not needed for the demo.
 | `Commit … not found in the repository` | The `GitCommit` value is wrong or not pushed yet. Check `git log --oneline -1` and that it is on GitHub, then create the stack again. |
 | `… iamInstanceProfile … invalid`, or *not authorized to perform: iam:PassRole* | Only if `InstanceProfileName` was set: the profile does not exist or may not be used. Create the stack again with it empty (the default). |
 | `DBInstanceIdentifier … already exists`, or the load balancer, target group or launch template name already exists | Resources from an earlier stack are still there: wait until it is deleted, or use another stack name. |
-| `NimbusUrl` gives *502* or *503* | No server is healthy yet: a new server needs 6–10 minutes. Check **Target groups → nimbus-app-tg → Targets**. |
+| `NimbusUrl` gives *502* or *503* | No server is healthy yet: a new server needs a few minutes (2–6 on 31 Oct). Check **Target groups → nimbus-app-tg → Targets**. |
 | Target stays *unhealthy* | The app did not start: read the server's system log. |
 | The page loads, then shows *connection lost* again and again | The live connection is not staying on one server: check that stickiness is on (**Target group → Attributes**). |
 | No scale-out during the load test | Check the request count is really above 1,000 per server per minute (**CloudWatch → Metrics → ApplicationELB → RequestCountPerTarget**); add more parallel loops. Alarms need about 3 minutes above target. |
@@ -291,8 +320,8 @@ When the Sandbox session ends, the stack stays, but its servers and database
 may be stopped. After starting a new session:
 1. Start **RDS → nimbus-db** if it is stopped, and wait for *Available*.
 2. The Auto Scaling group sees stopped servers as unhealthy and replaces
-   them. Each replacement installs the same commit from GitHub, so allow about
-   10 minutes.
+   them. Each replacement installs the same commit from GitHub, so allow a few
+   minutes (about 4 on 31 Oct).
 3. `NimbusUrl` stays the same: the load balancer's address does not change when
    servers are replaced.
 
@@ -381,8 +410,9 @@ stack first, or wait for any operation in progress to finish.
     password, and Yahoo over HTTPS;
   - `cfn-signal` worked without a role on the single-server stack, so a role
     would only add unused permissions;
-  - `InstanceProfileName` can attach one if the Auto Scaling set-up turns out to
-    need it.
+  - confirmed with the Auto Scaling group on 31 Oct: every server reported
+    success and shows *IAM role: –*. `InstanceProfileName` can still attach one
+    if a later change needs AWS access.
   - The access model for people is in the README, *Security and access*.
 - **SSH closed by default:** troubleshooting uses the EC2 system log (as in
   Lesson 7). SSH can be opened to a single IP with `AllowedSshCidr`.

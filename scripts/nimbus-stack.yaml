@@ -22,12 +22,13 @@ Parameters:
     Description: Branch to deploy (e.g. feature/unified-nimbus-prototype before it is merged).
   GitCommit:
     Type: String
-    Default: ""
-    AllowedPattern: "^$|^[0-9a-f]{7,40}$"
-    ConstraintDescription: Empty, or a commit hash of 7-40 lower-case hex characters (e.g. e49a2c6).
+    AllowedPattern: "^[0-9a-f]{7,40}$"
+    ConstraintDescription: Required - a commit hash of 7-40 lower-case hex characters (e.g. ff18611).
     Description: >
-      Exact commit to deploy (e.g. e49a2c6). Leave empty to deploy the latest commit of GitBranch.
-      The commit must be on GitBranch. Setup fails, and the stack shows CREATE_FAILED, if it is not found.
+      Required. Exact commit to deploy (e.g. ff18611, from git log --oneline -1). Every server the Auto
+      Scaling group launches, now or later, runs this same commit. It must be on GitBranch; setup
+      fails, and the stack shows CREATE_FAILED, if it is not found. To deploy new code, update the
+      stack with a new value.
   InstanceProfileName:
     Type: String
     Default: ""
@@ -410,21 +411,18 @@ Resources:
             # 1. System packages (Python 3.9 ships with Amazon Linux 2023)
             dnf install -y git python3-pip aws-cfn-bootstrap
 
-            # 2. Get the application from GitHub: the latest commit of GitBranch, or exactly
-            #    GitCommit if one is given (full clone, so a short hash can be checked out)
+            # 2. Get exactly GitCommit from GitHub (full clone of GitBranch, so a short hash
+            #    can be checked out). Every server, including those added later by scaling,
+            #    runs the same commit (QA 31 Oct 2026, D-1).
             APP_DIR=/home/ec2-user/nimbus
             REQUESTED_COMMIT="${GitCommit}"
-            if [ -n "$REQUESTED_COMMIT" ]; then
-              git clone --branch "${GitBranch}" "${GitHubRepoUrl}" "$APP_DIR"
-              if ! git -C "$APP_DIR" rev-parse --verify --quiet "$REQUESTED_COMMIT^{commit}" >/dev/null; then
-                echo "nimbus-setup: commit $REQUESTED_COMMIT not found in ${GitHubRepoUrl}"
-                signal 1 "Commit ${GitCommit} not found in the repository: check the GitCommit parameter"
-                exit 1
-              fi
-              git -C "$APP_DIR" checkout --detach "$REQUESTED_COMMIT"
-            else
-              git clone --depth 1 --branch "${GitBranch}" "${GitHubRepoUrl}" "$APP_DIR"
+            git clone --branch "${GitBranch}" "${GitHubRepoUrl}" "$APP_DIR"
+            if ! git -C "$APP_DIR" rev-parse --verify --quiet "$REQUESTED_COMMIT^{commit}" >/dev/null; then
+              echo "nimbus-setup: commit $REQUESTED_COMMIT not found in ${GitHubRepoUrl}"
+              signal 1 "Commit ${GitCommit} not found in the repository: check the GitCommit parameter"
+              exit 1
             fi
+            git -C "$APP_DIR" checkout --detach "$REQUESTED_COMMIT"
 
             # 3. Install dependencies in a virtual environment: exact versions from
             #    requirements-lock.txt, so every deployment gets the same packages
@@ -436,7 +434,7 @@ Resources:
             COMMIT=$(git -C "$APP_DIR" rev-parse --short HEAD)
             # Written to the EC2 system log (Actions > Monitor and troubleshoot > Get system log),
             # so the deployed commit can be proven from the AWS side as well as in the app.
-            echo "nimbus-setup: deployed commit $COMMIT from branch ${GitBranch} (requested commit: ${!REQUESTED_COMMIT:-latest})"
+            echo "nimbus-setup: deployed commit $COMMIT from branch ${GitBranch} (requested commit: $REQUESTED_COMMIT)"
             mkdir -p "$APP_DIR/analyses-data"
             chown -R ec2-user:ec2-user "$APP_DIR"
 

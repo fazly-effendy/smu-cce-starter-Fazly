@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 APP_NAME = "Nimbus"
-APP_VERSION = "0.11.0"
+APP_VERSION = "0.11.1"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA_DIR = PROJECT_ROOT / "analyses-data"
@@ -96,6 +96,21 @@ def local_today():
 def deployed_commit() -> Optional[str]:
     """Git commit the server was deployed from (set by EC2 user data), if known."""
     return os.environ.get("NIMBUS_COMMIT") or None
+
+
+def process_started_at(pid: Optional[int] = None) -> Optional[datetime]:
+    """When a process started (UTC), from Linux's /proc; None where that is not available
+    (e.g. Windows or macOS, when the caller falls back to the first time it is asked)."""
+    try:
+        stat = Path(f"/proc/{pid or os.getpid()}/stat").read_text()
+        # Fields after the command name, which is in brackets and may contain spaces;
+        # the start time (field 22) is in clock ticks after boot.
+        start_ticks = int(stat.rsplit(")", 1)[1].split()[19])
+        boot_time = next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines()
+                         if line.startswith("btime "))
+        return datetime.fromtimestamp(boot_time + start_ticks / os.sysconf("SC_CLK_TCK"), tz=timezone.utc)
+    except (OSError, ValueError, IndexError, StopIteration, AttributeError):
+        return None
 
 
 def server_name() -> Optional[str]:

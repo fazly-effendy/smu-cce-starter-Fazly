@@ -316,7 +316,7 @@ lock(540, fy - 9, "#1F4FB8")
 text(560, fy + 5, "security group rule (inbound)", size=13.5, fill="#334155")
 add(f'<rect x="780" y="{fy - 9}" width="18" height="18" rx="4" fill="#F8FAFC" stroke="#94A3B8" stroke-dasharray="4 3"/>')
 text(806, fy + 5, "present only under load", size=13.5, fill="#334155")
-text(56, fy + 34, "Status: VPC, EC2 and RDS verified on AWS 25–29 Oct 2026 · load balancer and automatic scaling: AWS test pending",
+text(56, fy + 34, "Status: VPC, EC2 and RDS verified on AWS 25–29 Oct 2026 · load balancer, automatic scale-out / scale-in and self-healing verified 31 Oct 2026",
      size=13.5, weight=600, fill="#475569")
 text(56, fy + 58, "No NAT gateway: the database needs no internet access. App servers have no IAM role. Passwords are CloudFormation NoEcho parameters, never in the repository.",
      size=12.5, fill="#64748B")

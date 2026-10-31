@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 import fake_yahoo
@@ -271,3 +272,44 @@ def test_values_at_the_time_follow_the_comparison_order():
     button(app, "Open discussion").click().run()
     table = next(t.value for t in app.table if "Stock price at discussion" in t.value.index)
     assert list(table.columns) == ["MSFT", "AAPL"]
+
+
+# --- QA run on AWS, 31 Oct 2026 (v0.11.0; docs/evidence/2026-10-31-scaling) -------------
+
+def test_server_start_time_is_when_the_process_started_not_the_first_page_view():
+    """D-4: the sidebar said "server started 13:28" on a server that started at 13:08,
+    because the time was taken at the first page view."""
+    import subprocess
+    import sys
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    import config
+
+    if config.process_started_at() is None:
+        pytest.skip("process start times come from /proc (Linux only)")
+    src = Path(config.__file__).resolve().parent
+    before = datetime.now(timezone.utc)
+    # A process that waits 3 s before it is asked when it started (like a server whose
+    # first visitor arrives later).
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import sys, time; sys.path.insert(0, sys.argv[1]); time.sleep(3); import config; "
+         "from datetime import datetime, timezone; "
+         "print(config.process_started_at().timestamp(), datetime.now(timezone.utc).timestamp())", str(src)],
+        capture_output=True, text=True, check=True).stdout.split()
+    started, asked = float(out[0]), float(out[1])
+    assert before.timestamp() - 1 <= started <= before.timestamp() + 2
+    assert asked - started >= 2.5  # the start time, not the time it was asked
+
+
+def test_client_id_warning_sits_below_the_row_not_inside_the_id_column():
+    """D-5: the warning inside the Client ID column pushed the row out of line."""
+    from test_app_workflow import set_client, start_app
+
+    app = set_client(start_app(), "QA 1031")
+    warnings = [c.value for c in app.caption if c.value.startswith("⚠️ A client ID is")]
+    assert warnings and "letters, digits" in warnings[0]
+    id_column = next(col for col in app.columns
+                     if any(t.key == "new_client_id" for t in col.text_input))
+    assert not [c for c in id_column.caption if "Client ID" in c.value or "client ID" in c.value]

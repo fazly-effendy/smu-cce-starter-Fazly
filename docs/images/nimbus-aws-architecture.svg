@@ -155,6 +155,6 @@
 <text x="560" y="1137" font-size="13.5" font-weight="400" fill="#334155" text-anchor="start" opacity="1.0">security group rule (inbound)</text>
 <rect x="780" y="1123" width="18" height="18" rx="4" fill="#F8FAFC" stroke="#94A3B8" stroke-dasharray="4 3"/>
 <text x="806" y="1137" font-size="13.5" font-weight="400" fill="#334155" text-anchor="start" opacity="1.0">present only under load</text>
-<text x="56" y="1166" font-size="13.5" font-weight="600" fill="#475569" text-anchor="start" opacity="1.0">Status: VPC, EC2 and RDS verified on AWS 25–29 Oct 2026 · load balancer and automatic scaling: AWS test pending</text>
+<text x="56" y="1166" font-size="13.5" font-weight="600" fill="#475569" text-anchor="start" opacity="1.0">Status: VPC, EC2 and RDS verified on AWS 25–29 Oct 2026 · load balancer, automatic scale-out / scale-in and self-healing verified 31 Oct 2026</text>
 <text x="56" y="1190" font-size="12.5" font-weight="400" fill="#64748B" text-anchor="start" opacity="1.0">No NAT gateway: the database needs no internet access. App servers have no IAM role. Passwords are CloudFormation NoEcho parameters, never in the repository.</text>
 </svg>
