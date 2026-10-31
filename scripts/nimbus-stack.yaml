@@ -1,10 +1,12 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Nimbus (DS600) - Stage 2. A VPC with public and private subnets in two
-  Availability Zones; Amazon RDS for MySQL in the private subnets, reachable
-  only from the app server's security group; and one EC2 instance that clones
-  Nimbus from GitHub, installs it with EC2 user data, connects it to RDS and
-  runs it as a service on port 8501. Region: us-east-1 (AWS Academy Sandbox).
+  Nimbus (DS600) - Stage 3, with automatic scaling. A VPC with public and private
+  subnets in two Availability Zones; Amazon RDS for MySQL in the private subnets,
+  reachable only from the app servers; an Application Load Balancer; and an Auto
+  Scaling group of EC2 app servers (launch template + EC2 user data that clones
+  Nimbus from GitHub and runs it on port 8501), scaled by target tracking on CPU
+  and on requests per server (Lesson 9, AACF Module 10 and Lab 6).
+  Region: us-east-1 (AWS Academy Sandbox).
 
 # ---------------------------------------------------------------------------
 # Parameters: values chosen when the stack is created
@@ -51,12 +53,14 @@ Parameters:
   AllowedWebCidr:
     Type: String
     Default: 0.0.0.0/0
-    Description: Who may open Nimbus on port 8501. 0.0.0.0/0 = anyone (needed for a class demo).
+    Description: >
+      Who may open Nimbus (the load balancer, port 80). 0.0.0.0/0 = anyone (needed for a class demo).
+      The app servers themselves accept traffic only from the load balancer.
   AllowedSshCidr:
     Type: String
     Default: 127.0.0.1/32
     Description: >
-      Who may SSH to the instance. Closed by default (127.0.0.1/32); use the EC2 system log for
+      Who may SSH to the app servers. Closed by default (127.0.0.1/32); use the EC2 system log for
       troubleshooting, or set this to your own IP followed by /32 if you need SSH.
   DBUsername:
     Type: String
@@ -85,6 +89,36 @@ Parameters:
     Type: String
     Default: "8.4"
     Description: MySQL major version. RDS picks the current minor version.
+  MinServers:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 2
+    Description: Fewest app servers the Auto Scaling group keeps running (also the number at creation).
+  MaxServers:
+    Type: Number
+    Default: 3
+    MinValue: 3
+    MaxValue: 4
+    Description: >
+      Most app servers the Auto Scaling group may run under load (kept small for the Sandbox). At least
+      3, so there is always room above MinServers for scaling and for a rolling update.
+  CpuTargetPercent:
+    Type: Number
+    Default: 60
+    MinValue: 20
+    MaxValue: 90
+    Description: >
+      Target tracking on average CPU across the app servers (as in Lab 6): add servers when it stays
+      above this, remove them when it stays well below.
+  RequestsPerServerTarget:
+    Type: Number
+    Default: 1000
+    MinValue: 50
+    MaxValue: 100000
+    Description: >
+      Target tracking on load-balancer requests per server per minute: add servers when the average
+      stays above this. Normal use by a few RMs is far below it; a load test exceeds it.
 
 Conditions:
   HasInstanceProfile: !Not [!Equals [!Ref InstanceProfileName, ""]]
@@ -198,19 +232,33 @@ Resources:
       RouteTableId: !Ref PrivateRouteTable
 
   # -------------------------------------------------------------------------
-  # Security group for the application server
+  # Security groups: the internet reaches only the load balancer (port 80);
+  # the app servers accept Streamlit traffic (8501) only from the load balancer
   # -------------------------------------------------------------------------
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Nimbus load balancer - HTTP 80 from AllowedWebCidr
+      VpcId: !Ref NimbusVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref AllowedWebCidr
+          Description: Nimbus in the browser
+      Tags: [{Key: Name, Value: nimbus-alb-sg}]
+
   AppSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Nimbus web app - Streamlit on 8501; SSH closed unless AllowedSshCidr is set
+      GroupDescription: Nimbus app servers - Streamlit 8501 from the load balancer only; SSH closed unless AllowedSshCidr is set
       VpcId: !Ref NimbusVpc
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 8501
           ToPort: 8501
-          CidrIp: !Ref AllowedWebCidr
-          Description: Nimbus in the browser
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+          Description: Streamlit from nimbus-alb-sg only
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
@@ -272,132 +320,255 @@ Resources:
       Tags: [{Key: Name, Value: nimbus-db}]
 
   # -------------------------------------------------------------------------
-  # Application server. User data installs Nimbus and starts it as a systemd
-  # service (restarts automatically and survives reboots). The stack only
-  # reports CREATE_COMPLETE after the app has reached RDS and answers its
-  # health check, via cfn-signal and the CreationPolicy below.
+  # Load balancer: one stable address for every app server. Sticky sessions
+  # keep each user on the same server, because a Streamlit session (the
+  # comparison on screen, unsaved notes) lives in that server's memory.
   # -------------------------------------------------------------------------
-  AppServer:
-    Type: AWS::EC2::Instance
-    DependsOn: PublicDefaultRoute  # RDS is waited for automatically: user data uses its endpoint
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: NimbusGatewayAttachment
+    Properties:
+      Name: !Sub ${AWS::StackName}-alb
+      Scheme: internet-facing
+      Type: application
+      Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      SecurityGroups: [!Ref LoadBalancerSecurityGroup]
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: "300"  # keep Streamlit's live connection open between interactions
+      Tags: [{Key: Name, Value: nimbus-alb}]
+
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${AWS::StackName}-app-tg
+      VpcId: !Ref NimbusVpc
+      Protocol: HTTP
+      Port: 8501
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /_stcore/health
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher: {HttpCode: "200"}
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: "true"
+        - Key: stickiness.type
+          Value: lb_cookie
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: "86400"
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+      Tags: [{Key: Name, Value: nimbus-app-tg}]
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref AppTargetGroup
+
+  # -------------------------------------------------------------------------
+  # Launch template: how every app server is built. User data installs Nimbus
+  # and starts it as a systemd service (restarts automatically and survives
+  # reboots). At stack creation and during a rolling update, each new server
+  # signals CloudFormation (cfn-signal) only after the app has reached RDS and
+  # answers its health check.
+  # -------------------------------------------------------------------------
+  AppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${AWS::StackName}-app
+      LaunchTemplateData:
+        ImageId: !Ref ImageId
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        # IAM: none by default (Nimbus needs no AWS credentials); see InstanceProfileName.
+        IamInstanceProfile: !If [HasInstanceProfile, {Name: !Ref InstanceProfileName}, !Ref "AWS::NoValue"]
+        SecurityGroupIds: [!Ref AppSecurityGroup]
+        MetadataOptions: {HttpTokens: required}
+        TagSpecifications:
+          - ResourceType: instance
+            Tags: [{Key: Name, Value: nimbus-app}]
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -euxo pipefail
+            exec > >(tee -a /var/log/nimbus-setup.log) 2>&1
+
+            signal() {
+              /opt/aws/bin/cfn-signal -e "$1" --reason "$2" \
+                --stack ${AWS::StackName} --resource AppAutoScalingGroup --region ${AWS::Region} || true
+            }
+            trap 'signal 1 "Nimbus setup failed: see the EC2 system log (lines after nimbus-setup)"' ERR
+
+            # 1. System packages (Python 3.9 ships with Amazon Linux 2023)
+            dnf install -y git python3-pip aws-cfn-bootstrap
+
+            # 2. Get the application from GitHub: the latest commit of GitBranch, or exactly
+            #    GitCommit if one is given (full clone, so a short hash can be checked out)
+            APP_DIR=/home/ec2-user/nimbus
+            REQUESTED_COMMIT="${GitCommit}"
+            if [ -n "$REQUESTED_COMMIT" ]; then
+              git clone --branch "${GitBranch}" "${GitHubRepoUrl}" "$APP_DIR"
+              if ! git -C "$APP_DIR" rev-parse --verify --quiet "$REQUESTED_COMMIT^{commit}" >/dev/null; then
+                echo "nimbus-setup: commit $REQUESTED_COMMIT not found in ${GitHubRepoUrl}"
+                signal 1 "Commit ${GitCommit} not found in the repository: check the GitCommit parameter"
+                exit 1
+              fi
+              git -C "$APP_DIR" checkout --detach "$REQUESTED_COMMIT"
+            else
+              git clone --depth 1 --branch "${GitBranch}" "${GitHubRepoUrl}" "$APP_DIR"
+            fi
+
+            # 3. Install dependencies in a virtual environment: exact versions from
+            #    requirements-lock.txt, so every deployment gets the same packages
+            python3 -m venv "$APP_DIR/.venv"
+            "$APP_DIR/.venv/bin/python" -m pip install --upgrade pip
+            REQS="$APP_DIR/requirements-lock.txt"
+            [ -f "$REQS" ] || REQS="$APP_DIR/requirements.txt"
+            "$APP_DIR/.venv/bin/python" -m pip install -r "$REQS"
+            COMMIT=$(git -C "$APP_DIR" rev-parse --short HEAD)
+            # Written to the EC2 system log (Actions > Monitor and troubleshoot > Get system log),
+            # so the deployed commit can be proven from the AWS side as well as in the app.
+            echo "nimbus-setup: deployed commit $COMMIT from branch ${GitBranch} (requested commit: ${!REQUESTED_COMMIT:-latest})"
+            mkdir -p "$APP_DIR/analyses-data"
+            chown -R ec2-user:ec2-user "$APP_DIR"
+
+            # 4. Database settings. Tracing is switched off from here on so the
+            #    password is never written to the setup log or the system log.
+            #    The file is readable by root only; systemd passes it to the app.
+            set +x
+            umask 077
+            cat > /etc/nimbus.env <<EOF
+            NIMBUS_DATA_DIR=$APP_DIR/analyses-data
+            NIMBUS_COMMIT=$COMMIT
+            NIMBUS_DATABASE_URL=mysql+pymysql://${DBUsername}:${DBPassword}@${NimbusDatabase.Endpoint.Address}:${NimbusDatabase.Endpoint.Port}/nimbus?charset=utf8mb4
+            EOF
+            umask 022
+
+            # 5. Check the app server can reach RDS and create the tables
+            ( set -a; . /etc/nimbus.env; set +a
+              cd "$APP_DIR" && runuser -u ec2-user -- .venv/bin/python scripts/check_database.py ) \
+              || { signal 1 "Nimbus cannot reach RDS: check nimbus-db-sg and the database status"; exit 1; }
+
+            # 6. Run Nimbus as a service on port 8501
+            cat > /etc/systemd/system/nimbus.service <<EOF
+            [Unit]
+            Description=Nimbus Streamlit app
+            After=network-online.target
+            Wants=network-online.target
+
+            [Service]
+            User=ec2-user
+            WorkingDirectory=$APP_DIR
+            EnvironmentFile=/etc/nimbus.env
+            ExecStart=$APP_DIR/.venv/bin/python -m streamlit run src/app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true
+            Restart=always
+            RestartSec=5
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+            systemctl daemon-reload
+            systemctl enable --now nimbus
+
+            # 7. Wait until the app answers, then tell CloudFormation it worked
+            for _ in $(seq 1 60); do
+              if curl -sf http://127.0.0.1:8501/_stcore/health; then
+                signal 0 "Nimbus (commit $COMMIT) is running on port 8501 and connected to RDS"
+                exit 0
+              fi
+              sleep 5
+            done
+            signal 1 "Nimbus did not answer its health check within 5 minutes: run 'journalctl -u nimbus'"
+
+  # -------------------------------------------------------------------------
+  # Auto Scaling group (Feature 6): keeps MinServers running across both
+  # Availability Zones, replaces a server that fails the load balancer's health
+  # check, and adds or removes servers automatically through the two
+  # target-tracking policies below. A new GitCommit (Update stack) replaces the
+  # servers one at a time; the database is not touched.
+  # -------------------------------------------------------------------------
+  AppAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn: PublicDefaultRoute  # new servers need the internet (GitHub, Python packages, Yahoo)
     CreationPolicy:
       ResourceSignal:
-        Count: 1
-        Timeout: PT20M
+        Count: !Ref MinServers
+        Timeout: PT25M
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MaxBatchSize: 1
+        MinInstancesInService: !Ref MinServers
+        PauseTime: PT25M
+        WaitOnResourceSignals: true
+        SuspendProcesses: [HealthCheck, ReplaceUnhealthy, AZRebalance, AlarmNotification, ScheduledActions]
     Properties:
-      ImageId: !Ref ImageId
-      InstanceType: !Ref InstanceType
-      KeyName: !Ref KeyName
-      # IAM: none by default (Nimbus needs no AWS credentials); see InstanceProfileName.
-      IamInstanceProfile: !If [HasInstanceProfile, !Ref InstanceProfileName, !Ref "AWS::NoValue"]
-      SubnetId: !Ref PublicSubnetA
-      SecurityGroupIds: [!Ref AppSecurityGroup]
-      Tags: [{Key: Name, Value: nimbus-app}]
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euxo pipefail
-          exec > >(tee -a /var/log/nimbus-setup.log) 2>&1
+      AutoScalingGroupName: !Sub ${AWS::StackName}-app-asg
+      VPCZoneIdentifier: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AppLaunchTemplate
+        Version: !GetAtt AppLaunchTemplate.LatestVersionNumber
+      MinSize: !Ref MinServers
+      MaxSize: !Ref MaxServers
+      # No DesiredCapacity: it starts at MinServers, and a later stack update does not
+      # reset a capacity that scaling has changed.
+      TargetGroupARNs: [!Ref AppTargetGroup]
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 900  # a new server needs about 6-10 minutes to install Nimbus
+      MetricsCollection:
+        - Granularity: 1Minute  # group metrics (e.g. GroupInServiceInstances) for the scaling evidence
+      Tags:
+        - Key: Project
+          Value: nimbus
+          PropagateAtLaunch: true
 
-          signal() {
-            /opt/aws/bin/cfn-signal -e "$1" --reason "$2" \
-              --stack ${AWS::StackName} --resource AppServer --region ${AWS::Region} || true
-          }
-          trap 'signal 1 "Nimbus setup failed: see the EC2 system log (lines after nimbus-setup)"' ERR
+  # Target tracking keeps a metric near its target, like a thermostat. Each policy
+  # creates its own CloudWatch alarms. With two policies, the group adds a server
+  # when either metric is above its target, and removes one only when both are
+  # well below theirs.
+  CpuScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AppAutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      EstimatedInstanceWarmup: 600
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: !Ref CpuTargetPercent
 
-          # 1. System packages (Python 3.9 ships with Amazon Linux 2023)
-          dnf install -y git python3-pip aws-cfn-bootstrap
-
-          # 2. Get the application from GitHub: the latest commit of GitBranch, or exactly
-          #    GitCommit if one is given (full clone, so a short hash can be checked out)
-          APP_DIR=/home/ec2-user/nimbus
-          REQUESTED_COMMIT="${GitCommit}"
-          if [ -n "$REQUESTED_COMMIT" ]; then
-            git clone --branch "${GitBranch}" "${GitHubRepoUrl}" "$APP_DIR"
-            if ! git -C "$APP_DIR" rev-parse --verify --quiet "$REQUESTED_COMMIT^{commit}" >/dev/null; then
-              echo "nimbus-setup: commit $REQUESTED_COMMIT not found in ${GitHubRepoUrl}"
-              signal 1 "Commit ${GitCommit} not found in the repository: check the GitCommit parameter"
-              exit 1
-            fi
-            git -C "$APP_DIR" checkout --detach "$REQUESTED_COMMIT"
-          else
-            git clone --depth 1 --branch "${GitBranch}" "${GitHubRepoUrl}" "$APP_DIR"
-          fi
-
-          # 3. Install dependencies in a virtual environment: exact versions from
-          #    requirements-lock.txt, so every deployment gets the same packages
-          python3 -m venv "$APP_DIR/.venv"
-          "$APP_DIR/.venv/bin/python" -m pip install --upgrade pip
-          REQS="$APP_DIR/requirements-lock.txt"
-          [ -f "$REQS" ] || REQS="$APP_DIR/requirements.txt"
-          "$APP_DIR/.venv/bin/python" -m pip install -r "$REQS"
-          COMMIT=$(git -C "$APP_DIR" rev-parse --short HEAD)
-          # Written to the EC2 system log (Actions > Monitor and troubleshoot > Get system log),
-          # so the deployed commit can be proven from the AWS side as well as in the app.
-          echo "nimbus-setup: deployed commit $COMMIT from branch ${GitBranch} (requested commit: ${!REQUESTED_COMMIT:-latest})"
-          mkdir -p "$APP_DIR/analyses-data"
-          chown -R ec2-user:ec2-user "$APP_DIR"
-
-          # 4. Database settings. Tracing is switched off from here on so the
-          #    password is never written to the setup log or the system log.
-          #    The file is readable by root only; systemd passes it to the app.
-          set +x
-          umask 077
-          cat > /etc/nimbus.env <<EOF
-          NIMBUS_DATA_DIR=$APP_DIR/analyses-data
-          NIMBUS_COMMIT=$COMMIT
-          NIMBUS_DATABASE_URL=mysql+pymysql://${DBUsername}:${DBPassword}@${NimbusDatabase.Endpoint.Address}:${NimbusDatabase.Endpoint.Port}/nimbus?charset=utf8mb4
-          EOF
-          umask 022
-
-          # 5. Check the app server can reach RDS and create the tables
-          ( set -a; . /etc/nimbus.env; set +a
-            cd "$APP_DIR" && runuser -u ec2-user -- .venv/bin/python scripts/check_database.py ) \
-            || { signal 1 "Nimbus cannot reach RDS: check nimbus-db-sg and the database status"; exit 1; }
-
-          # 6. Run Nimbus as a service on port 8501
-          cat > /etc/systemd/system/nimbus.service <<EOF
-          [Unit]
-          Description=Nimbus Streamlit app
-          After=network-online.target
-          Wants=network-online.target
-
-          [Service]
-          User=ec2-user
-          WorkingDirectory=$APP_DIR
-          EnvironmentFile=/etc/nimbus.env
-          ExecStart=$APP_DIR/.venv/bin/python -m streamlit run src/app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true
-          Restart=always
-          RestartSec=5
-
-          [Install]
-          WantedBy=multi-user.target
-          EOF
-          systemctl daemon-reload
-          systemctl enable --now nimbus
-
-          # 7. Wait until the app answers, then tell CloudFormation it worked
-          for _ in $(seq 1 60); do
-            if curl -sf http://127.0.0.1:8501/_stcore/health; then
-              signal 0 "Nimbus (commit $COMMIT) is running on port 8501 and connected to RDS"
-              exit 0
-            fi
-            sleep 5
-          done
-          signal 1 "Nimbus did not answer its health check within 5 minutes: run 'journalctl -u nimbus'"
+  RequestScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    DependsOn: HttpListener  # the metric exists only once the target group is attached to the listener
+    Properties:
+      AutoScalingGroupName: !Ref AppAutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      EstimatedInstanceWarmup: 600
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ALBRequestCountPerTarget
+          ResourceLabel: !Join ["/", [!GetAtt LoadBalancer.LoadBalancerFullName, !GetAtt AppTargetGroup.TargetGroupFullName]]
+        TargetValue: !Ref RequestsPerServerTarget
 
 Outputs:
   NimbusUrl:
-    Description: Open this in a browser (http, not https)
-    Value: !Sub http://${AppServer.PublicDnsName}:8501
-  PublicIp:
-    Description: Public IP address of the app server
-    Value: !GetAtt AppServer.PublicIp
-  InstanceId:
-    Description: App server instance (EC2 > Instances)
-    Value: !Ref AppServer
+    Description: Open this in a browser (http, not https). It is the load balancer, so it stays the same when servers change.
+    Value: !Sub http://${LoadBalancer.DNSName}
+  AutoScalingGroup:
+    Description: App servers (EC2 > Auto Scaling groups > Activity shows every launch and termination)
+    Value: !Ref AppAutoScalingGroup
+  TargetGroup:
+    Description: Load balancer targets (EC2 > Target groups > Targets shows each server's health)
+    Value: !GetAtt AppTargetGroup.TargetGroupName
   InstanceProfile:
-    Description: IAM instance profile attached to the app server (EC2 > nimbus-app > Security)
+    Description: IAM instance profile attached to the app servers
     Value: !If [HasInstanceProfile, !Ref InstanceProfileName, "none"]
   VpcId:
     Description: VPC for Nimbus

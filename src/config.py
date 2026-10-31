@@ -8,12 +8,13 @@ the instance environment) without edits. See .env.example.
 from __future__ import annotations
 
 import os
+import socket
 from datetime import datetime, timezone, tzinfo
 from pathlib import Path
 from typing import Optional
 
 APP_NAME = "Nimbus"
-APP_VERSION = "0.10.3"
+APP_VERSION = "0.11.0"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA_DIR = PROJECT_ROOT / "analyses-data"
@@ -95,6 +96,18 @@ def local_today():
 def deployed_commit() -> Optional[str]:
     """Git commit the server was deployed from (set by EC2 user data), if known."""
     return os.environ.get("NIMBUS_COMMIT") or None
+
+
+def server_name() -> Optional[str]:
+    """Short name of the app server this page is served from, e.g. "ip-10-0-2-37" on EC2.
+
+    Shown only on a deployed server (NIMBUS_COMMIT is set by EC2 user data), so a demo can
+    show which server behind the load balancer answered. It is the machine's own host name:
+    no AWS API call, and nothing shown locally.
+    """
+    if not deployed_commit():
+        return None
+    return socket.gethostname().split(".")[0] or None
 
 
 def describe_database_url(url: str) -> str:

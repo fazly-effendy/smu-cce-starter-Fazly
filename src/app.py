@@ -40,6 +40,7 @@ from config import (
     deployed_commit,
     describe_database_url,
     local_today,
+    server_name,
     timezone_label,
     to_local,
 )
@@ -563,7 +564,9 @@ def sidebar() -> None:
                 "- Figures are historical, not forecasts or advice"
             )
         commit = deployed_commit()
+        server = server_name()
         st.caption(f"Nimbus {APP_VERSION}" + (f" · commit {commit}" if commit else "")
+                   + (f" · server {server}" if server else "")
                    + f" · server started {format_timestamp(server_started_at())}")
 
 

@@ -11,7 +11,7 @@ exactly as it was.
 
 Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 
-> **Status (v0.10.3).** Implements the instructor's feedback of 27 Oct 2026:
+> **Status (v0.11.0).** Implements the instructor's feedback of 27 Oct 2026:
 > client-discussion snapshots (Client ID, ticker, discussion date, stock price
 > at the time, client's interests) stored in `clients`, `discussions` and
 > `discussion_companies`, retrievable by client and by company. The
@@ -19,10 +19,12 @@ Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 > (`tests/test_app_workflow.py`). **Step 12 (the same on Amazon RDS) passed in
 > the AWS Sandbox on 29 Oct 2026 with v0.10.0, commit `02c72aa`**
 > ([evidence](docs/evidence/2026-10-29-step12/README.md)). v0.10.1 (fixes from
-> that run), v0.10.2 (news summaries from Yahoo's RSS feed) and v0.10.3
-> (database settings for several app servers) are tested locally and not yet
-> deployed. The environment is created by CloudFormation
-> (VPC, EC2, RDS). Auto scaling (Feature 6) follows the Week 9 lesson; see
+> that run), v0.10.2 (news summaries from Yahoo's RSS feed), v0.10.3
+> (database settings for several app servers) and v0.11.0 (automatic scaling)
+> are tested locally and not yet deployed. The environment is created by
+> CloudFormation: VPC, RDS, and from v0.11.0 a load balancer and an Auto
+> Scaling group of EC2 app servers (Feature 6, Lesson 9). **The scaling
+> template has not yet been tested on AWS**; see
 > [Project status](#project-status).
 
 ---
@@ -127,7 +129,7 @@ criteria are from the Lesson 5 slides.
 | 3 | Storage: save analysis | The complete discussion snapshot is saved: in the database (to reopen it) and as a Markdown file in `analyses-data/` (EBS on AWS) | ✅ Working |
 | 4 | Storage: RM notes | Discussion snapshot with **Client ID, tickers, discussion date, stock price at the time, client's interests**, plus notes and follow-up actions | ✅ Working |
 | 5 | Database search | `clients`, `discussions`, `discussion_companies` in SQL; search by client, company (ticker or name) and date; reopen the matching discussion | ✅ Working on Amazon RDS in the Sandbox: instructor's acceptance test step 12 passed on 29 Oct 2026 ([evidence](docs/evidence/2026-10-29-step12/README.md)); SQLite locally |
-| 6 | Scaling | Automatically add and remove capacity | ⏳ After the Week 9 lesson. Reopening already works from any app server (snapshot stored in the database) |
+| 6 | Scaling | Automatically add and remove capacity: an Application Load Balancer in front of an Auto Scaling group of 1–3 app servers in two Availability Zones, with target tracking on CPU (60%, as in Lab 6) and on requests per server (1,000 a minute); sticky sessions; any server reopens any saved discussion (snapshot in RDS); the sidebar names the server that answered | 🛠️ In the CloudFormation template (v0.11.0), checked with `cfn-lint`. ⏳ **Not yet tested on AWS** ([scaling test](docs/aws-deployment.md#c-automatic-scaling-feature-6)) |
 
 | Marking area | Where to look |
 |---|---|
@@ -203,7 +205,7 @@ server) and never contacts Yahoo.
 ├── lessons/                      # course lesson notes
 ├── requirements.txt              # app dependencies
 ├── requirements-lock.txt         # exact versions installed on EC2 (Python 3.9)
-├── requirements-dev.txt          # + pytest
+├── requirements-dev.txt          # + pytest, PyYAML (tests only)
 ├── .streamlit/config.toml        # dark theme, one accent colour (#2563EB)
 ├── .env.example                  # configuration variable names (no secrets)
 └── .gitignore                    # excludes .venv/, analyses-data/, *.db, .env
@@ -388,6 +390,11 @@ They cover:
 - several app servers on one database (`tests/test_multi_server.py`): two
   servers saving the same new client at once both succeed, and each server's
   MySQL connections are capped;
+- the CloudFormation design (`tests/test_cloudformation.py`, needs PyYAML from
+  `requirements-dev.txt`): servers come only from the Auto Scaling group behind
+  the load balancer, both target-tracking policies exist, sessions are sticky,
+  only the load balancer reaches the servers and only the servers reach the
+  database, and code updates replace servers one at a time;
 - `tests/test_app_workflow.py::test_instructor_acceptance_test`, which drives
   the real Streamlit app through the instructor's acceptance test, steps 1–11:
   client → two tickers → generate → prices side by side → revenue growth,
@@ -406,7 +413,7 @@ each test):
 NIMBUS_TEST_DATABASE_URL='mysql+pymysql://<user>:<password>@127.0.0.1:3306/nimbus_test' python -m pytest
 ```
 
-All 133 tests pass on MariaDB 10.11 (MySQL-compatible) through PyMySQL.
+All 139 tests pass on MariaDB 10.11 (MySQL-compatible) through PyMySQL.
 `python scripts/check_database.py` checks that the configured database is
 reachable and its tables exist, printing only the host and row counts, never
 the password.
@@ -455,25 +462,27 @@ Full steps, evidence checklist, troubleshooting and clean-up are in
 [`docs/aws-deployment.md`](docs/aws-deployment.md).
 
 In short:
-1. Push to GitHub. EC2 clones from GitHub.
+1. Push to GitHub. Each new server clones from GitHub.
 2. In the Sandbox, open **CloudFormation → Create stack → Upload a template file**, choose
    `scripts/nimbus-stack.yaml`, name the stack `nimbus`, type a new `DBPassword`
    (letters and digits, never a real password), and set `GitCommit` to the exact commit
    to deploy (e.g. `e49a2c6`; empty = latest on `GitBranch`, default `main`). The deployed
    commit is shown in the app's sidebar and in the EC2 system log. Leave
-   `InstanceProfileName` empty (no IAM role). **New code needs a new stack, and deleting
-   the stack deletes every saved discussion;** **Update stack** does not change the code.
-   See [Keeping saved discussions](docs/aws-deployment.md#keeping-saved-discussions).
-3. Wait for `CREATE_COMPLETE` (about 15–20 minutes, mostly RDS). It is only reported after
-   Nimbus has connected to RDS and answers its health check.
-4. Open the `NimbusUrl` output (http://…:8501).
+   `InstanceProfileName` empty (no IAM role) and the scaling settings at their defaults.
+   **Deleting the stack deletes every saved discussion.** New code is deployed with
+   **Update stack** and a new `GitCommit`, which replaces the servers one at a time and
+   keeps RDS (not yet tested on AWS). See
+   [Keeping saved discussions](docs/aws-deployment.md#keeping-saved-discussions).
+3. Wait for `CREATE_COMPLETE` (about 20–25 minutes, mostly RDS). It is only reported after
+   the first server has connected to RDS and answers its health check.
+4. Open the `NimbusUrl` output: the load balancer, `http://nimbus-alb-….elb.amazonaws.com`.
 
 | Stage | What it adds | Status |
 |---|---|---|
 | 1 | VPC with public and private subnets, security group, EC2 installed by user data and run as a systemd service | ✅ Deployed in the Sandbox (`CREATE_COMPLETE`, app reachable) |
 | 2 | Amazon RDS for MySQL in the private subnets, reachable only from the app server | ✅ Deployed and verified in the Sandbox (25 and 27 Oct 2026), including a reboot. [Evidence](docs/evidence/2026-10-27-stage2/README.md). The template does not change for v0.10.0: the app creates the new tables on first start |
 | 2b | Instructor's acceptance test step 12: steps 1–11 on Amazon RDS with v0.10.0 | ✅ Passed on 29 Oct 2026, including a reboot. [Evidence](docs/evidence/2026-10-29-step12/README.md); the small defects found are fixed in v0.10.1 |
-| 3 | Scaling (Week 9 lesson) | Not started |
+| 3 | Automatic scaling (Lesson 9): Application Load Balancer, launch template, Auto Scaling group (1–3 servers, two Availability Zones), target tracking on CPU and requests per server; app servers reachable only through the load balancer | 🛠️ Template ready (v0.11.0), `cfn-lint` clean. ⏳ AWS test pending ([procedure](docs/aws-deployment.md#c-automatic-scaling-feature-6)) |
 
 `scripts/lesson5.yaml` and `scripts/lesson5-nimbus.yaml` are the course's
 Lesson 6–7 templates, kept for reference.
@@ -500,7 +509,7 @@ search all matched the expected results. The defects found, and what was done:
 | Missing statement item dropped (NVDA total liabilities) | Medium | Only reported items were listed | ✅ Fixed: every standard item listed, N/A if not reported |
 | Earnings table shows "None"; legend said "Blank" | Low | Streamlit shows missing values as "None" | ✅ Legend corrected |
 | Same article under two tickers | Low | The article is linked to both | Kept, and documented |
-| No load balancer; single server | Medium | Scaling is Stage 3 | ⏳ After the Week 9 lesson |
+| No load balancer; single server | Medium | Scaling is Stage 3 | 🛠️ Load balancer and Auto Scaling group added in v0.11.0; AWS test pending |
 | Database host shown in History | Low | Deliberate demo evidence | Kept (password never shown) |
 | No segment data (e.g. cloud) | Low | Not provided by Yahoo | Documented in limitations |
 
@@ -525,7 +534,8 @@ Nimbus has no logins of its own (see *Known limitations* and *Future work*).
 | Relationship manager | The Nimbus web page only | Compare, save, search and reopen discussions. No AWS access | As designed. No app logins (a known limitation) |
 | Developer | AWS console through company single sign-on (an IAM role) | Read CloudFormation events and the EC2 system log; deploy a test stack | Not created: the Sandbox has one shared lab login, and the course does not require staff IAM accounts |
 | Administrator | AWS console through single sign-on, with multi-factor sign-in | Create and delete stacks; manage RDS, security groups and IAM | Not created: same reason |
-| App server (EC2) | **No IAM role** (`InstanceProfileName` empty by default) | No AWS API access at all. The app reaches RDS with a database username and password over the network, and Yahoo over HTTPS | **Implemented** in `scripts/nimbus-stack.yaml` |
+| Load balancer | Public, port 80 (`nimbus-alb-sg`) | Forwards users to a healthy app server on port 8501 | **Implemented** (v0.11.0) |
+| App servers (EC2) | **No IAM role** (`InstanceProfileName` empty by default) | No AWS API access at all. They accept web traffic only from the load balancer; the app reaches RDS with a database username and password over the network, and Yahoo over HTTPS | **Implemented** in `scripts/nimbus-stack.yaml` |
 | Database (RDS) | No AWS identity | Accepts connections on port 3306 only from the app server's security group; no public address | **Implemented** |
 
 **Why the app server has no IAM role (least privilege):** an IAM role gives a
@@ -598,8 +608,21 @@ never in the repository, the template or the logs (details in
 - **Sandbox database settings:** single-AZ, 20 GB, no automated backups, and
   deleted together with the stack. These keep the Sandbox cost and creation
   time low; production would use Multi-AZ and backups.
-- **No user accounts:** everyone using an instance sees the same clients and
-  history. A design for RM logins is under *Future work*.
+- **No user accounts:** everyone sees the same clients and history. A design
+  for RM logins is under *Future work*.
+- **Scaling is not instant.** A new server installs Nimbus from GitHub at boot,
+  so it serves users about 6–10 minutes after the alarm. Scale-in waits about
+  15 minutes of low load. A pre-built server image (AMI) would start faster,
+  but would have to be rebuilt for every code change.
+- **Unsaved work lives on one server.** Sticky sessions keep each user on one
+  server. If that server is removed (scale-in or failure), the user reconnects
+  to another and loses anything not yet saved. Saved discussions are in RDS
+  and are unaffected.
+- **HTTP only.** The load balancer listens on port 80. HTTPS would need a
+  domain name and a certificate, which the Sandbox setup does not include.
+- **The database is a single point of failure.** App servers span two
+  Availability Zones; the Sandbox-sized RDS instance does not (no Multi-AZ, no
+  backups).
 - **Company search** runs when you press Enter, not on every keystroke
   (true as-you-type search would need a third-party Streamlit component and a
   Yahoo call per key press). Results are cached for a day.

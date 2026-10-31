@@ -3,32 +3,39 @@
 Template: [`scripts/nimbus-stack.yaml`](../scripts/nimbus-stack.yaml) (CloudFormation).
 Region: **us-east-1** (the only region the Sandbox allows).
 
-The deployment is built in stages. Each stage is the same template, extended:
+The deployment was built in stages. Each stage is the same template, extended:
 
 | Stage | Adds | Status |
 |---|---|---|
 | 1 | VPC (2 public + 2 private subnets), security group, EC2 app server installed by user data, systemd service, health-checked `CREATE_COMPLETE` | ✅ Deployed in the Sandbox |
-| 2 | Amazon RDS for MySQL in the private subnets; database security group that accepts MySQL only from the app server; app connected to RDS | ✅ Deployed and verified (25 and 27 Oct 2026), including the reboot test. Evidence: [`docs/evidence/2026-10-27-stage2`](evidence/2026-10-27-stage2/README.md) |
-| 3 | Scaling, per the Week 9 lesson | After Week 9 |
+| 2 | Amazon RDS for MySQL in the private subnets; database security group that accepts MySQL only from the app servers; app connected to RDS | ✅ Deployed and verified (25, 27 and 29 Oct 2026), including the reboot test. Evidence: [`2026-10-27-stage2`](evidence/2026-10-27-stage2/README.md), [`2026-10-29-step12`](evidence/2026-10-29-step12/README.md) |
+| 3 | **Automatic scaling (Feature 6, Lesson 9: AACF Module 10 and Lab 6):** Application Load Balancer, launch template, Auto Scaling group across two Availability Zones, target tracking on CPU and on requests per server, CloudWatch alarms | 🛠️ In the template from v0.11.0; checked with `cfn-lint`. **Not yet tested on AWS** |
 
-## Architecture (Stage 2)
+## Architecture (Stage 3)
 
-![Nimbus AWS network architecture](images/nimbus-aws-architecture.png)
+![Nimbus AWS architecture with automatic scaling](images/nimbus-aws-architecture.png)
 
 The same in text form (renders on GitHub):
 
 ```mermaid
 flowchart LR
-    U([RM browser]) -->|http :8501| IGW[Internet gateway]
+    U([RM browser]) -->|http :80| IGW[Internet gateway]
     subgraph VPC["nimbus-vpc 10.0.0.0/16"]
-      subgraph PUB["Public subnet 10.0.0.0/24"]
-        EC2["nimbus-app (EC2)<br/>Streamlit, systemd<br/>briefing files on EBS<br/>SG: nimbus-app-sg"]
+      subgraph PUB["Public subnets A + B (two Availability Zones)"]
+        ALB["nimbus-alb<br/>Application Load Balancer<br/>sticky sessions<br/>SG: nimbus-alb-sg"]
+        subgraph ASG["Auto Scaling group nimbus-app-asg · min 1, max 3"]
+          EC2["nimbus-app (EC2)<br/>Streamlit :8501, systemd<br/>Markdown copies on EBS<br/>SG: nimbus-app-sg"]
+          EC2B["more app servers<br/>added under load"]
+        end
       end
       subgraph PRIV["Private subnets 10.0.1.0/24 + 10.0.3.0/24<br/>no internet route"]
         RDS[("nimbus-db<br/>RDS for MySQL<br/>SG: nimbus-db-sg")]
       end
     end
-    IGW --> EC2
+    CW["CloudWatch alarms<br/>target tracking: CPU 60%,<br/>1,000 requests/server/min"] -.->|add / remove| ASG
+    IGW --> ALB
+    ALB -->|:8501| EC2
+    ALB -.-> EC2B
     EC2 -->|MySQL 3306<br/>only from nimbus-app-sg| RDS
     EC2 -->|HTTPS| Y[(Yahoo Finance)]
     EC2 -->|git clone| G[(GitHub)]
@@ -36,27 +43,46 @@ flowchart LR
 
 ## What the stack creates
 
-| Resource | Name tag | Purpose |
+| Resource | Name | Purpose |
 |---|---|---|
 | VPC 10.0.0.0/16 | `nimbus-vpc` | Private network for Nimbus |
 | Internet gateway | `nimbus-igw` | Lets the public subnets reach the internet |
-| Public subnets 10.0.0.0/24, 10.0.2.0/24 | `nimbus-public-a`, `nimbus-public-b` | App server (first AZ); second AZ ready for scaling |
+| Public subnets 10.0.0.0/24, 10.0.2.0/24 | `nimbus-public-a`, `nimbus-public-b` | Load balancer and app servers, one subnet in each of two Availability Zones |
 | Private subnets 10.0.1.0/24, 10.0.3.0/24 | `nimbus-private-a`, `nimbus-private-b` | The database; **no route to the internet** |
 | Route tables | `nimbus-rtb-public`, `nimbus-rtb-private` | Public: 0.0.0.0/0 → internet gateway. Private: local only (no NAT gateway, so no NAT cost) |
-| App security group | `nimbus-app-sg` | Port 8501 from `AllowedWebCidr` (default anyone); SSH closed unless `AllowedSshCidr` is set |
+| Load balancer security group | `nimbus-alb-sg` | Port 80 from `AllowedWebCidr` (default anyone) |
+| App security group | `nimbus-app-sg` | Port 8501 **only from `nimbus-alb-sg`**; SSH closed unless `AllowedSshCidr` is set |
 | Database security group | `nimbus-db-sg` | Port 3306 **only from `nimbus-app-sg`**; nothing else can connect |
+| Application Load Balancer | `nimbus-alb` | The address users open (`NimbusUrl`). Spreads new users across healthy servers; **sticky sessions** keep each user on one server |
+| Target group | `nimbus-app-tg` | The app servers on port 8501, health-checked on `/_stcore/health` every 15 s |
+| Launch template | `nimbus-app` | How every app server is built: Amazon Linux 2023, t2.micro, no IAM role, `nimbus-app-sg`, and the user data that installs Nimbus |
+| Auto Scaling group | `nimbus-app-asg` | Keeps 1–3 app servers (`MinServers`, `MaxServers`) across both public subnets; replaces a server the load balancer reports unhealthy |
+| Scaling policies (2) | `CpuScalingPolicy`, `RequestScalingPolicy` | Target tracking: average CPU 60% (as in Lab 6) and 1,000 load-balancer requests per server per minute. Each creates its own CloudWatch alarms |
 | DB subnet group | `nimbus-db-subnets` | Places RDS in the two private subnets (RDS requires two AZs) |
 | RDS for MySQL (db.t3.micro, 20 GB) | `nimbus-db` | Database `nimbus`: tables `clients`, `discussions`, `discussion_companies` (created by the app on first start). **Not publicly accessible** |
-| EC2 instance (t2.micro, Amazon Linux 2023) | `nimbus-app` | Clones the repo, installs the exact versions in `requirements-lock.txt` in a venv, connects to RDS, runs Nimbus as the `nimbus` systemd service |
 
 **How "complete" is decided:** CloudFormation creates RDS first, because the
-EC2 user data needs its endpoint. The instance then installs Nimbus, runs
-`scripts/check_database.py` (connects to RDS and creates the tables), starts
-the service, and signals CloudFormation (`cfn-signal`) only after Nimbus
-answers its health check (`/_stcore/health`). Any failure signals the reason
-and the stack shows `CREATE_FAILED`. So `CREATE_COMPLETE` means the app is
-running **and** has reached the database. It is still not the whole proof;
-the evidence below is.
+user data needs its endpoint. The Auto Scaling group then launches the first
+server. It installs Nimbus at the requested commit, runs
+`scripts/check_database.py` (connects to RDS and creates the tables), starts the
+service, and signals CloudFormation (`cfn-signal`) only after Nimbus answers its
+health check. Any failure signals the reason and the stack shows
+`CREATE_FAILED`. So `CREATE_COMPLETE` means the app is running **and** has
+reached the database. It is still not the whole proof; the evidence below is.
+
+**How automatic scaling works:** target tracking keeps a metric near a target,
+like a thermostat. Each policy creates two CloudWatch alarms:
+- **Scale out:** if average CPU stays above 60%, or the load balancer sends a
+  server more than 1,000 requests a minute, for about 3 minutes, the Auto
+  Scaling group launches another server. That server installs itself from the
+  launch template, which takes about 6–10 minutes. The load balancer sends it
+  traffic once its health check passes.
+- **Scale in:** when **both** metrics have stayed well below target for about
+  15 minutes, a server is removed. The group never goes below `MinServers` or
+  above `MaxServers`.
+
+The CPU policy follows Lab 6. Streamlit uses little CPU, so the request
+policy is the one a classroom load test can trigger.
 
 **Where the password goes:** you type `DBPassword` when creating the stack.
 It is a `NoEcho` parameter, so CloudFormation shows `****`. User data writes it
@@ -64,106 +90,168 @@ into `/etc/nimbus.env` (readable by root only, read by systemd) with logging
 switched off, so it does not appear in the setup log or the system log. Nimbus
 only ever displays the database host, never the URL with the password.
 
-## Verified on 25 Oct 2026
+## Verified on AWS (Stage 2, single server)
 
-An independent audit of the deployed stack (no changes made) confirmed:
+These checks used the Stage 2 template (one EC2 instance, no load balancer).
+They remain valid for the network, RDS and app set-up, which Stage 3 keeps.
 
-- the stack reached `CREATE_COMPLETE` (02:02:46 SGT), and `AppServer` received the SUCCESS signal;
-- EC2 t2.micro on Amazon Linux 2023, in the public subnet, 2/2 status checks;
-  inbound 8501 from anywhere, SSH limited to 127.0.0.1/32;
-- RDS `nimbus-db` (MySQL Community, db.t3.micro) *Available*, internet access
-  disabled, and its security group accepts traffic only from the app server's
-  security group;
-- the History tab reports `mysql+pymysql` at the `nimbus-db` endpoint, and
-  generate, compare, note, save, search by ticker, reopen and the invalid-ticker
-  case all passed. Row counts rose by exactly one briefing per save.
+- **25 Oct 2026:** an independent audit (no changes made) confirmed:
+  - `CREATE_COMPLETE` with the SUCCESS signal;
+  - RDS *Available* with internet access disabled;
+  - the database security group accepts only the app's security group;
+  - generate, compare, note, save, search by ticker, reopen and the invalid-ticker case all passed.
+- **27 Oct 2026** (commit `c6b9b46`): the same checks, plus the reboot test.
+  [Evidence](evidence/2026-10-27-stage2/README.md).
+- **29 Oct 2026** (commit `02c72aa`, v0.10.0): the instructor's acceptance
+  test, step 12 (steps 1–11 on RDS), plus a reboot: 29 of 30 checks passed.
+  [Evidence](evidence/2026-10-29-step12/README.md).
 
-A second deployment on 27 Oct 2026 (from `main`, commit c6b9b46) passed the same checks
-**and the reboot test**: the History counts and the saved briefing were unchanged after
-EC2 → Reboot. Screenshots and results:
-[`docs/evidence/2026-10-27-stage2`](evidence/2026-10-27-stage2/README.md).
+The Sandbox also shows a *Bastion Host* and a *Lab Instance*; they belong to
+the AWS Academy lab environment, not to this stack.
 
-The Sandbox also shows a
-*Bastion Host* and a *Lab Instance*; they belong to the AWS Academy lab
-environment, not to this stack.
+## Deploy
 
-## Stage 2: deploy
-
-1. **Push first.** EC2 clones from GitHub, not from your laptop. Check that
-   the branch you deploy is on GitHub and includes `scripts/check_database.py`.
+1. **Push first.** Each new server clones from GitHub, not from your laptop.
+   Note the commit to deploy: `git log --oneline -1`.
 2. Start the Sandbox, wait for the green dot, and open the AWS console. Check
    the region is **N. Virginia**.
-3. If a Stage 1 `nimbus` stack still exists, delete it first and wait for
-   `DELETE_COMPLETE`.
+3. If an older `nimbus` stack exists (for example the single-server Stage 2
+   stack), delete it first and wait for `DELETE_COMPLETE`. This deletes its
+   saved discussions (test data).
 4. Go to **CloudFormation → Create stack → With new resources (standard) →
    Upload a template file**, and choose `scripts/nimbus-stack.yaml`.
 5. Stack name: `nimbus`. Parameters:
    - `DBPassword`: type a **new** password, 8–41 letters and digits only. Do
      not reuse any real password. Nobody needs to see it again: the app reads
-     it from the instance.
+     it from the server.
    - `GitBranch`: `main`.
-   - `GitCommit`: **for a recorded deployment (evidence, final demo), the exact
-     commit to deploy**, e.g. `e49a2c6`, copied from `git log --oneline -1` or
-     GitHub. Leave it empty to deploy the latest commit of `GitBranch`.
-   - `InstanceProfileName`: leave **empty** (no IAM role; Nimbus needs no AWS
-     credentials). See the README, *Security and access*.
+   - `GitCommit`: **the exact commit to deploy**, e.g. `1a14188`. Leave it
+     empty only for a quick test (it then takes the latest commit of
+     `GitBranch`, and each later server could get a newer one).
+   - `InstanceProfileName`: leave **empty** (no IAM role; see *Troubleshooting*
+     if the stack waits for a signal that never arrives).
+   - `MinServers` 1, `MaxServers` 3, `CpuTargetPercent` 60,
+     `RequestsPerServerTarget` 1000: keep the defaults.
    - Leave the others at their defaults (`DBUsername` = `nimbusadmin`).
+6. Click **Next** twice, then **Submit**. It takes about 20–25 minutes: RDS
+   takes about 10 minutes, then the first server about 6–10 minutes.
+7. Open the `NimbusUrl` output: `http://nimbus-alb-….elb.amazonaws.com`
+   (http, not https, and no port number).
 
-**Deploying new code, and what it does to saved discussions:** read
-[Keeping saved discussions](#keeping-saved-discussions) first. In short,
-the only way to deploy a new commit is to delete the stack and create it
-again, and that **deletes every saved discussion**.
-6. Click **Next** twice, then **Submit**. It takes about 15–20 minutes: RDS
-   takes about 10 minutes, then EC2 setup about 5–10 minutes.
-
-## Stage 2: evidence to capture
+## Evidence to capture
 
 Crop out the account ID in every screenshot. Never screenshot the Parameters
 tab with a visible password (it shows `****`, which is fine).
 
-1. **Stack → Events:** `NimbusDatabase` `CREATE_COMPLETE`, then `AppServer`
-   *"Received SUCCESS signal with UniqueId i-…"* (CloudFormation's own wording for a
-   success; it does not display the reason text), then the stack at `CREATE_COMPLETE`.
-   **Which code is deployed:** the bottom of the app's sidebar shows
-   *Nimbus … · commit … · server started …*. The same commit is in the EC2 system log
-   (**EC2 → nimbus-app → Actions → Monitor and troubleshoot → Get system log**, line
-   `nimbus-setup: deployed commit e49a2c6 from branch main (requested commit: e49a2c6)`).
-   With `GitCommit` set, the deployed and requested commits must be the same; with it
-   empty, the line says `requested commit: latest` and the commit should match the top
-   of the branch on GitHub at deployment time.
-2. **Stack → Outputs:** `NimbusUrl` and `DatabaseEndpoint`.
-3. **RDS → Databases → nimbus-db → Connectivity & security:**
+### A. Deployment and security
+
+1. **Stack → Events:** `NimbusDatabase` `CREATE_COMPLETE`, then
+   `AppAutoScalingGroup` *"Received SUCCESS signal with UniqueId i-…"*, then the
+   stack at `CREATE_COMPLETE`.
+2. **Which code is deployed:**
+   - the app's sidebar shows *Nimbus … · commit … · server ip-10-0-… · server started …*;
+   - the same commit is in the server's system log (**EC2 → Instances →
+     nimbus-app → Actions → Monitor and troubleshoot → Get system log**):
+     `nimbus-setup: deployed commit 1a14188 from branch main (requested commit: 1a14188)`;
+   - the deployed and requested commits must be the same.
+3. **Stack → Outputs:** `NimbusUrl`, `AutoScalingGroup`, `TargetGroup`,
+   `DatabaseEndpoint`, `InstanceProfile` = `none`.
+4. **RDS → Databases → nimbus-db → Connectivity & security:**
    - *Publicly accessible: No*;
    - VPC `nimbus-vpc`, subnet group `nimbus-db-subnets`;
-   - VPC security group `nimbus-db-sg`.
-4. **EC2 → Security groups → nimbus-db-sg → Inbound rules:** one rule, MySQL/Aurora 3306, source
-   = the `sg-…` ID of `nimbus-app-sg` (not an IP range).
-5. **Browser at `NimbusUrl`** (http, not https): the instructor's acceptance
-   test, step 12 (steps 1–11 on Amazon RDS):
-   - **New client**, Client ID `C-1001`; add `AAPL, MSFT`; **Generate comparison**.
-   - Show the share-price chart, the comparison table (revenue growth, net
-     margin, debt-to-equity) and the trend charts.
-   - **Discussion** tab: write the client's interests, then **Save discussion**.
-   - **History tab:** the caption reads *Database: mysql+pymysql at
-     nimbus-db.….rds.amazonaws.com:3306 · 1 client, 1 discussion, 2 company
-     records*. This is the proof that the records are in RDS, not SQLite.
-   - Filter by client `C-1001` and open the discussion: snapshot banner, the
-     note, and **Values at the time of the discussion** (read from RDS). Then
-     search company `msft` and open it again.
-6. **Persistence:** go to **EC2 → nimbus-app → Instance state → Reboot**. After
-   about two minutes, reload the same URL. The sidebar's *server started* time is now
-   after the reboot (proof that the server really restarted), the History caption shows
-   the same counts, and the discussion still opens with the same values.
+   - security group `nimbus-db-sg`.
+5. **Security groups, inbound rules:**
+   - `nimbus-alb-sg`: 80 from 0.0.0.0/0;
+   - `nimbus-app-sg`: 8501 from the `sg-…` of `nimbus-alb-sg` (not an IP range), and 22 from 127.0.0.1/32;
+   - `nimbus-db-sg`: 3306 from the `sg-…` of `nimbus-app-sg`.
+6. **The servers are not directly reachable:** a server's own address
+   (`http://<its public IP>:8501`) does not load. Only the load balancer
+   address works.
 7. **VPC → Route tables → nimbus-rtb-private → Routes:** only the `local` route.
-8. **IAM:** **EC2 → nimbus-app**, instance summary: *IAM role: –* (no role, by
-   design), and the stack output `InstanceProfile` = `none`. The stack still
-   received the SUCCESS signal, which shows setup needs no AWS credentials.
+8. **IAM:** EC2 → the `nimbus-app` instance: *IAM role: –* (no role, by design).
 
-Optional, for a viva question on SQL: to run SQL directly against RDS, set
-`AllowedSshCidr` to your own IP followed by `/32` when creating the stack, then
-SSH in. Run `sudo dnf install -y mariadb105`, then
-`mysql -h <DatabaseEndpoint> -u nimbusadmin -p nimbus`, and type the password
-at the prompt. Then run, for example:
+### B. The app through the load balancer (instructor's acceptance test)
+
+At `NimbusUrl`:
+- **New client** `C-1001`; add `AAPL, MSFT`; **Generate comparison**.
+- Show the price chart, the comparison table (revenue growth, net margin,
+  debt-to-equity) and the trends.
+- **News** tab: sources and summaries.
+- **Discussion** tab: client's interests, then **Save discussion**.
+- **History:** the caption reads *Database: mysql+pymysql at
+  nimbus-db.….rds.amazonaws.com:3306 · 1 client, 1 discussion, 2 company
+  records*.
+- Search by client `C-1001` and by company `msft`, and reopen: the values at
+  the time of the discussion match.
+- **Download** the saved discussion (Markdown).
+
+### C. Automatic scaling (Feature 6)
+
+Plan about 40–50 minutes inside one Sandbox session.
+
+1. **Before:**
+   - **EC2 → Auto Scaling groups → nimbus-app-asg:** *Desired 1, Min 1, Max 3*;
+   - **Target groups → nimbus-app-tg → Targets:** 1 *healthy*;
+   - **CloudWatch → Alarms:** four `TargetTracking-nimbus-app-asg-…` alarms, all *OK*
+     (or *Insufficient data* at first).
+2. **Create load** for about 10 minutes, so requests per server go above 1,000 a
+   minute. Use either:
+   - **CloudShell** (console toolbar, if the Sandbox allows it):
+     ```bash
+     URL=http://nimbus-alb-….elb.amazonaws.com   # the NimbusUrl output
+     for i in $(seq 20); do (end=$((SECONDS+600)); while [ $SECONDS -lt $end ]; do curl -s -o /dev/null "$URL/"; done) & done; wait
+     ```
+   - or **Windows PowerShell** on a laptop:
+     ```powershell
+     $url = "http://nimbus-alb-....elb.amazonaws.com/"   # the NimbusUrl output
+     $jobs = 1..10 | ForEach-Object { Start-Job -ArgumentList $url { param($u)
+       $end = (Get-Date).AddMinutes(10)
+       while ((Get-Date) -lt $end) { try { Invoke-WebRequest $u -UseBasicParsing | Out-Null } catch {} } } }
+     $jobs | Wait-Job | Remove-Job
+     ```
+3. **Scale-out evidence** (about 3–5 minutes after the load starts, then 6–10
+   minutes for the new server):
+   - **CloudWatch → Alarms:** the request policy's *AlarmHigh* alarm in **In alarm**;
+   - **Auto Scaling group → Activity:** *"Launching a new EC2 instance … in
+     response to an alarm"*, with *Desired 2*;
+   - **Target group → Targets:** 2 *healthy*, in different Availability Zones
+     when the group placed them so;
+   - **CloudWatch → Metrics → ApplicationELB → RequestCountPerTarget:** the graph
+     above 1,000.
+4. **Any server, same data:**
+   - open `NimbusUrl` in a few private or incognito windows until the sidebar
+     shows the other server's name (each new window may get a different server);
+   - on that server, search and reopen the discussion saved in B: the same values
+     and note.
+5. **Scale in:** stop the load (Ctrl+C, or wait for the 10 minutes to end).
+   About 15–20 minutes later:
+   - **Activity:** *"Terminating EC2 instance … in response to an alarm"*;
+   - *Desired 1*;
+   - the saved discussions are all still there.
+6. **Label manual actions as manual.** Any change you make yourself, for
+   example editing *Desired capacity*, is not automatic scaling.
+
+### D. Self-healing and persistence (replaces the reboot test)
+
+**EC2 → Instances →** select the one `nimbus-app` server **→ Instance state →
+Terminate** (this deletes only that server; RDS and the saved discussions
+stay).
+- The load balancer reports it unhealthy.
+- **Activity** shows the group launching a replacement.
+- About 10 minutes later, `NimbusUrl` works again: the sidebar shows a new server
+  name and a new *server started* time, and the saved discussion reopens unchanged.
+
+Only do this with the team's agreement: the app is unavailable for those minutes.
+
+### Optional: SQL directly against RDS
+
+For a viva question on SQL:
+1. Set `AllowedSshCidr` to your own IP followed by `/32` when creating the stack,
+   then SSH to a server.
+2. Run `sudo dnf install -y mariadb105`, then
+   `mysql -h <DatabaseEndpoint> -u nimbusadmin -p nimbus`, and type the password
+   at the prompt.
+3. Run, for example:
 
 ```sql
 -- every saved discussion, newest first, with its client
@@ -182,106 +270,124 @@ Close SSH again afterwards. This step is not needed for the demo.
 
 | Symptom | Check |
 |---|---|
-| `CREATE_FAILED` on `NimbusDatabase` | Read the status reason. If the reason names the engine version or instance class, choose another allowed value (e.g. `DBEngineVersion` `8.0`) and create the stack again. |
-| `CREATE_FAILED` on `AppServer`: *cannot reach RDS* | Check `nimbus-db-sg` inbound (3306 from `nimbus-app-sg`) and that `nimbus-db` is *Available*. The system log shows each attempt from `check_database.py`. |
-| `CREATE_FAILED` on `AppServer` (other reason) | **EC2 → nimbus-app → Actions → Monitor and troubleshoot → Get system log**; look for lines after `nimbus-setup` / `fatal` / `ERROR`. |
-| `Remote branch … not found` | The `GitBranch` parameter does not exist on GitHub; push it or use `main`. |
-| `Commit … not found in the repository` (Events reason or system log) | The `GitCommit` value is wrong or not pushed yet. Check `git log --oneline -1` and that it is on GitHub, then delete and recreate the stack. |
-| `CREATE_FAILED` on `AppServer`: *… iamInstanceProfile.name is invalid*, or *not authorized to perform: iam:PassRole* | Only if `InstanceProfileName` was set: the profile does not exist or may not be used. Create the stack again with it empty (the default). |
-| `DBInstanceIdentifier … already exists` | A `nimbus-db` from an earlier stack is still there: wait until it is deleted, or use another stack name. |
-| History tab says *Cannot reach the briefing database* | RDS stopped or still starting (e.g. after the Sandbox was resumed). Wait until *Available*, then reload. |
-| Page does not load | Use `http://`, not `https://`; check the `nimbus-app-sg` inbound rule for 8501. |
-| Timed out after 20 minutes | Packages could not install, or RDS was unreachable on every attempt; check the system log. |
+| `CREATE_FAILED` on `NimbusDatabase` | Read the status reason. If it names the engine version or instance class, choose another allowed value (e.g. `DBEngineVersion` `8.0`) and create the stack again. |
+| `CREATE_FAILED` on `LoadBalancer`, `AppAutoScalingGroup` or a scaling policy: *not authorized* | The Sandbox does not allow that service for this account. Note the exact message and ask the instructor. |
+| `AppAutoScalingGroup` fails: *cannot reach RDS* (reason) | Check `nimbus-db-sg` inbound (3306 from `nimbus-app-sg`) and that `nimbus-db` is *Available*. The server's system log shows each attempt from `check_database.py`. |
+| `AppAutoScalingGroup` fails: other reason | **EC2 → Instances → nimbus-app → Actions → Monitor and troubleshoot → Get system log**; look for lines after `nimbus-setup`, `fatal` or `ERROR`. |
+| `AppAutoScalingGroup` times out (*did not receive the required number of signals*), but the system log ends with Nimbus running and the target is *healthy* | The success signal did not reach CloudFormation. Look for a `cfn-signal` error in the system log. If it reports missing credentials or *not authorized*, delete the stack and create it again with `InstanceProfileName` = `LabInstanceProfile` (the Sandbox's role, used only for this signal). Record this in the README, because the no-role design would then change. |
+| `Commit … not found in the repository` | The `GitCommit` value is wrong or not pushed yet. Check `git log --oneline -1` and that it is on GitHub, then create the stack again. |
+| `… iamInstanceProfile … invalid`, or *not authorized to perform: iam:PassRole* | Only if `InstanceProfileName` was set: the profile does not exist or may not be used. Create the stack again with it empty (the default). |
+| `DBInstanceIdentifier … already exists`, or the load balancer, target group or launch template name already exists | Resources from an earlier stack are still there: wait until it is deleted, or use another stack name. |
+| `NimbusUrl` gives *502* or *503* | No server is healthy yet: a new server needs 6–10 minutes. Check **Target groups → nimbus-app-tg → Targets**. |
+| Target stays *unhealthy* | The app did not start: read the server's system log. |
+| The page loads, then shows *connection lost* again and again | The live connection is not staying on one server: check that stickiness is on (**Target group → Attributes**). |
+| No scale-out during the load test | Check the request count is really above 1,000 per server per minute (**CloudWatch → Metrics → ApplicationELB → RequestCountPerTarget**); add more parallel loops. Alarms need about 3 minutes above target. |
+| History says *Cannot reach the briefing database* | RDS stopped or still starting (e.g. after the Sandbox was resumed). Wait until *Available*, then reload. |
+| Page does not load at all | Use `http://`, not `https://`, and no `:8501`; check the `nimbus-alb-sg` inbound rule for 80. |
 
 ## Sandbox sessions
 
-When the Sandbox session ends, the stack stays but its servers may be stopped.
-After starting a new session, check that **EC2 → nimbus-app** is *Running* and
-**RDS → nimbus-db** is *Available*, and start them if not (database first). A
-stopped-and-started instance gets a new public address, so read the address
-again from **EC2 → nimbus-app → Public IPv4 DNS** and add `:8501` (the stack
-output keeps the old one). Saved discussions and the database survive.
+When the Sandbox session ends, the stack stays, but its servers and database
+may be stopped. After starting a new session:
+1. Start **RDS → nimbus-db** if it is stopped, and wait for *Available*.
+2. The Auto Scaling group sees stopped servers as unhealthy and replaces
+   them. Each replacement installs the same commit from GitHub, so allow about
+   10 minutes.
+3. `NimbusUrl` stays the same: the load balancer's address does not change when
+   servers are replaced.
+
+Saved discussions are in RDS and survive.
 
 ## Keeping saved discussions
 
-Saved discussions live in RDS (with Markdown copies on the instance's disk).
-Both belong to the stack:
+Saved discussions live in RDS. Each server also keeps Markdown copies on its
+own disk; these go when the server goes, and the download is rebuilt from RDS.
 
 - **Deleting the stack deletes them.** The database is set to
   `DeletionPolicy: Delete` with no final snapshot (a Sandbox choice: no
-  leftover snapshots and their storage). The instance's disk goes too.
-- **Updating the stack does not deploy new code.** EC2 user data runs only
-  when the instance is first created. If you change `GitCommit`, `GitBranch`
-  or the user data and choose **Update stack**, CloudFormation stops and starts
-  the instance and reports `UPDATE_COMPLETE`, but the app on it is still the
-  old commit. Do not use **Update stack** to deploy code; the sidebar and the
-  system log would show the old commit.
-- **So a new commit means a new stack with an empty database.**
-
-How we work with this:
-
-1. **Create the final stack once,** on the submission commit (`GitCommit`),
-   then record the final evidence and give the demo on that same stack.
-   Between Sandbox sessions, resume it (see *Sandbox sessions*); do not
-   recreate it.
-2. **If code must change after that,** record the evidence you still need
-   first (screenshots keep their date and commit), then delete and recreate
-   the stack, and enter the demo clients again from the demo flow. All
-   clients are fictional, so nothing real is lost.
-3. **With scaling (Stage 3, planned):** if servers are launched by an Auto
-   Scaling group, a new commit could be rolled out by replacing the servers
-   while RDS stays. This is to be designed with the scaling lesson.
+  leftover snapshots and their storage).
+- **Deploying new code no longer needs a new stack** (Stage 3; **not yet tested
+  on AWS**). Choose **Update stack → Use current template** and change only
+  `GitCommit`:
+  - CloudFormation creates a new launch-template version;
+  - the Auto Scaling group then replaces the servers one at a time (a rolling
+    update), waiting for each new server's success signal;
+  - RDS is not changed, so the saved discussions stay.
+  - Do not change `DBPassword`, `DBUsername` or the database settings in an
+    update.
+- **How we work with this:** create the final stack once, on the submission
+  commit, record the final evidence and give the demo on that stack. Resume it
+  between Sandbox sessions; do not recreate it.
 
 ## Clean up after testing
 
 **CloudFormation → nimbus → Delete.** This removes every resource listed above,
-including the database (no final snapshot is kept), the instance's disk and
-every saved discussion (see *Keeping saved discussions*). If **Delete** is
-greyed out, select the stack first, or wait for any operation in progress to
-finish.
+including the load balancer, the servers, the database (no final snapshot is
+kept) and every saved discussion. If **Delete** is greyed out, select the
+stack first, or wait for any operation in progress to finish.
 
 ## Design choices to be able to explain
 
-- **RDS in private subnets, no public access (Lesson 8):** the database has no
-  internet route and no public address. The only way in is through the app
-  server, enforced by a security-group-to-security-group rule rather than an IP
-  range, so it keeps working when the app server's IP changes (and for several
-  servers once scaling is added).
+- **Scaling with a load balancer and an Auto Scaling group (Lesson 9, AACF
+  Module 10 and Lab 6):**
+  - the load balancer gives users one address;
+  - the Auto Scaling group adds and removes servers automatically, and replaces
+    failed ones;
+  - target tracking chooses when: CPU, as in Lab 6, plus requests per server,
+    which reflects RM traffic directly and can be shown in a classroom test;
+  - max 3 servers keeps the Sandbox cost and limits low.
+- **Sticky sessions:**
+  - a Streamlit session (the comparison on screen, a half-written note) lives in
+    one server's memory, so each user must stay on one server;
+  - saved discussions are in RDS, so any server can reopen any of them;
+  - if a server is removed (scale-in or failure), its users lose unsaved work and
+    reconnect to another server. Saved work is safe.
+- **Servers accept traffic only from the load balancer:** `nimbus-app-sg`
+  allows 8501 only from `nimbus-alb-sg`, so the servers are not directly on the
+  internet. The database accepts only the app servers.
+- **RDS in private subnets, no public access (Lesson 8):**
+  - the database has no internet route and no public address;
+  - the only way in is from the app servers, enforced by a
+    security-group-to-security-group rule rather than an IP range;
+  - so it works for any number of servers, whatever their addresses.
 - **Discussions in RDS, a Markdown copy on EBS (instructor feedback; Lessons 7
-  and 8):** RDS holds the client, the discussion and its note, one row per
-  company with the values observed at the time, and the complete snapshot used
-  to reopen it. The instance's EBS disk keeps a readable Markdown copy. Because
-  reopening reads RDS, any app server can reopen any discussion, which is what
-  scaling needs.
+  and 8):**
+  - RDS holds the client, the discussion and its note, one row per company with
+    the values observed at the time, and the complete snapshot used to reopen it;
+  - each server's EBS disk keeps a readable Markdown copy;
+  - because reopening reads RDS, any server can reopen any discussion.
+- **Several servers, one database (v0.10.3, `src/storage/database.py`):**
+  - each server keeps at most 10 MySQL connections, so 3 servers stay well under
+    a `db.t3.micro`'s limit (about 60–80);
+  - two servers saving the same new client at once both succeed.
+- **Every server built the same way:**
+  - the launch template's user data installs the pinned commit with the exact
+    package versions in `requirements-lock.txt`;
+  - nothing is configured by hand, so a server added at 3 a.m. is identical to
+    the first.
 - **No NAT gateway:** the private subnets only hold the database, which needs
-  no internet access. This also avoids the NAT gateway's hourly cost.
+  no internet access. This also avoids the NAT gateway's hourly cost. The app
+  servers are in public subnets, behind the load balancer, so they can reach
+  GitHub and Yahoo.
 - **Secrets via a NoEcho parameter:** the password is never stored in the
   repository or template, and is not logged. See *Known limitations* in the
   README for what Secrets Manager would add.
 - **Sandbox-sized database:** `db.t3.micro`, 20 GB gp2, single-AZ, no automated
   backups, deleted with the stack: low cost and faster to create. Production
-  would use Multi-AZ, backups and deletion protection.
-- **IAM: no role on the app server (least privilege):** Nimbus calls no AWS
-  APIs. It reaches RDS with a database username and password and Yahoo over
-  HTTPS, and `cfn-signal` needs no credentials, so a role would only add
-  unused permissions. Lesson 7 lists the IAM role among EC2 launch settings;
-  we set it deliberately to none. `InstanceProfileName` can attach one if a
-  later change needs AWS access. The access model for people is in the README,
-  *Security and access*.
+  would use Multi-AZ, backups and deletion protection. The app servers already
+  span two Availability Zones; the database does not.
+- **IAM: no role on the app servers (least privilege):**
+  - Nimbus calls no AWS APIs: it reaches RDS with a database username and
+    password, and Yahoo over HTTPS;
+  - `cfn-signal` worked without a role on the single-server stack, so a role
+    would only add unused permissions;
+  - `InstanceProfileName` can attach one if the Auto Scaling set-up turns out to
+    need it.
+  - The access model for people is in the README, *Security and access*.
 - **SSH closed by default:** troubleshooting uses the EC2 system log (as in
   Lesson 7). SSH can be opened to a single IP with `AllowedSshCidr`.
 - **systemd instead of `nohup`:** the app restarts if it crashes and starts
   again after a reboot.
-- **Health-checked creation:** a green stack means a working app connected to
-  its database, not just a running server.
-- **Ready for several servers, not yet scaled:** each saved discussion's complete
-  snapshot is stored in RDS (`discussions.snapshot_json`), so any app server can
-  reopen any discussion. The Markdown copy on a server's disk is only a readable
-  copy, and the download is rebuilt from the snapshot when that server lacks the
-  file. Still open for Stage 3, after the Week 9 lesson: a load balancer and an
-  Auto Scaling group; sticky sessions (each user's unsaved comparison lives in one
-  server's memory, so it is lost if that server is replaced). Already done
-  in the app for several servers (v0.10.3, `src/storage/database.py`): each
-  server keeps at most 10 MySQL connections (well under a `db.t3.micro`'s
-  limit, about 60–80), and two servers saving the same new client at once
-  both succeed instead of one failing on the duplicate client.
+- **Health-checked creation and updates:** a green stack means a working app
+  connected to its database, not just a running server. During a code update,
+  each new server must pass the same check before the next old one is replaced.

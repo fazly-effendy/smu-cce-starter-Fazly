@@ -193,6 +193,20 @@ def test_sidebar_shows_version_and_server_start_time():
     app.run()
     captions = [c.value for c in app.sidebar.caption]
     assert any(c.startswith(f"Nimbus {APP_VERSION}") and "server started" in c for c in captions), captions
+    assert not any(" · server ip-" in c or " · commit " in c for c in captions)  # local: no server name
+
+
+def test_deployed_sidebar_names_the_server_behind_the_load_balancer(monkeypatch):
+    """With several servers behind the load balancer, the demo shows which one answered."""
+    import socket
+
+    monkeypatch.setenv("NIMBUS_COMMIT", "1a14188")
+    monkeypatch.setattr(socket, "gethostname", lambda: "ip-10-0-2-37.ec2.internal")
+    app = AppTest.from_file(APP, default_timeout=60)
+    app.run()
+    captions = [c.value for c in app.sidebar.caption]
+    assert any(f"Nimbus {APP_VERSION} · commit 1a14188 · server ip-10-0-2-37 · server started" in c
+               for c in captions), captions
 
 
 # --- Step 12 QA run on Amazon RDS (29 Oct 2026, QA-1029) -----------------------------------------
