@@ -3,13 +3,20 @@
 Template: [`scripts/nimbus-stack.yaml`](../scripts/nimbus-stack.yaml) (CloudFormation).
 Region: **us-east-1** (the only region the Sandbox allows).
 
+> **⚠️ Deleting the stack deletes every saved discussion.** The database belongs to the
+> stack and is deleted with it, with no snapshot. At the end of a Sandbox session, just
+> end the session: the stack and its data stay. To deploy new code, **update** the stack
+> (see [Keeping saved discussions](#keeping-saved-discussions)); do not delete and
+> recreate it. (On 31 Oct 2026 a test stack was deleted and its test discussion went
+> with it.)
+
 The deployment was built in stages. Each stage is the same template, extended:
 
 | Stage | Adds | Status |
 |---|---|---|
 | 1 | VPC (2 public + 2 private subnets), security group, EC2 app server installed by user data, systemd service, health-checked `CREATE_COMPLETE` | ✅ Deployed in the Sandbox |
 | 2 | Amazon RDS for MySQL in the private subnets; database security group that accepts MySQL only from the app servers; app connected to RDS | ✅ Deployed and verified (25, 27 and 29 Oct 2026), including the reboot test. Evidence: [`2026-10-27-stage2`](evidence/2026-10-27-stage2/README.md), [`2026-10-29-step12`](evidence/2026-10-29-step12/README.md) |
-| 3 | **Automatic scaling (Feature 6, Lesson 9: AACF Module 10 and Lab 6):** Application Load Balancer, launch template, Auto Scaling group across two Availability Zones, target tracking on CPU and on requests per server, CloudWatch alarms | ✅ Verified on AWS on 31 Oct 2026 with v0.11.0 (`ff18611`): automatic scale-out 1 → 3 and scale-in 3 → 1 on the request alarms, any server reopens any discussion, a terminated server replaced automatically, data intact. [Evidence](evidence/2026-10-31-scaling/README.md). Not yet tested: a code update by rolling update |
+| 3 | **Automatic scaling (Feature 6, Lesson 9: AACF Module 10 and Lab 6):** Application Load Balancer, launch template, Auto Scaling group across two Availability Zones, target tracking on CPU and on requests per server, CloudWatch alarms | ✅ Verified on AWS on 31 Oct 2026 with v0.11.0 (`ff18611`): automatic scale-out 1 → 3 and scale-in 3 → 1 on the request alarms, any server reopens any discussion, a terminated server replaced automatically, data intact. [Evidence](evidence/2026-10-31-scaling/README.md). Code update by rolling update verified on 1 Nov 2026: one server at a time, 2 minutes, database untouched ([evidence](evidence/2026-11-01-rolling-update/README.md)) |
 
 ## Architecture (Stage 3)
 
@@ -99,7 +106,18 @@ into `/etc/nimbus.env` (readable by root only, read by systemd) with logging
 switched off, so it does not appear in the setup log or the system log. Nimbus
 only ever displays the database host, never the URL with the password.
 
-## Verified on AWS (Stage 2, single server)
+## Verified on AWS
+
+**1 Nov 2026, code update** (`ff18611` → `e27a8e7`, v0.11.0 → v0.11.1; independent
+check): **Update stack** with only `GitCommit` changed.
+- CloudFormation updated the launch template.
+- The Auto Scaling group launched one new server, waited for its success signal, and
+  only then terminated the old one: 2 minutes in total, no outage observed.
+- The database had no update events and kept its creation time.
+- The new server ran 0.11.1, with the layout fix visible.
+- The stack had been created that morning, so the database was empty and data
+  survival could not be shown. That is checked in the next update.
+[Evidence](evidence/2026-11-01-rolling-update/README.md).
 
 **31 Oct 2026, Stage 3** (commit `ff18611`, v0.11.0; independent check, sections
 A–D below): deployment and security, the app through the load balancer (9 of 9),
@@ -313,6 +331,8 @@ Close SSH again afterwards. This step is not needed for the demo.
 | No scale-out during the load test | Check the request count is really above 1,000 per server per minute (**CloudWatch → Metrics → ApplicationELB → RequestCountPerTarget**); add more parallel loops. Alarms need about 3 minutes above target. |
 | History says *Cannot reach the briefing database* | RDS stopped or still starting (e.g. after the Sandbox was resumed). Wait until *Available*, then reload. |
 | Page does not load at all | Use `http://`, not `https://`, and no `:8501`; check the `nimbus-alb-sg` inbound rule for 80. |
+| Chrome shows *"Your connection to this site is not secure"* or an HTTPS-only warning | Chrome's HTTPS-first setting blocks plain `http://` sites. Click **Continue to site** (seen on 1 Nov 2026). Open the address once before a demo, so the warning is already out of the way. |
+| Update fails: *Parameter GitCommit failed to satisfy constraint* | `GitCommit` is required (v0.11.1). On create or update, type the commit hash, e.g. `e27a8e7`; if the form offers "Use existing value" for an old, empty value, turn it off. |
 
 ## Sandbox sessions
 
@@ -335,9 +355,12 @@ own disk; these go when the server goes, and the download is rebuilt from RDS.
 - **Deleting the stack deletes them.** The database is set to
   `DeletionPolicy: Delete` with no final snapshot (a Sandbox choice: no
   leftover snapshots and their storage).
-- **Deploying new code no longer needs a new stack** (Stage 3; **not yet tested
-  on AWS**). Choose **Update stack → Use current template** and change only
-  `GitCommit`:
+- **Deploying new code does not need a new stack** (Stage 3; the rolling update
+  was verified on 1 Nov 2026; data surviving it is checked in the next update).
+  Choose **Update stack**, then **Replace existing template** (upload
+  `scripts/nimbus-stack.yaml` if it changed) or **Use current template**, and
+  change only `GitCommit`. On the review page, check that `NimbusDatabase` is not
+  in the list of changes. Then:
   - CloudFormation creates a new launch-template version;
   - the Auto Scaling group then replaces the servers one at a time (a rolling
     update), waiting for each new server's success signal;
@@ -349,6 +372,9 @@ own disk; these go when the server goes, and the download is rebuilt from RDS.
   between Sandbox sessions; do not recreate it.
 
 ## Clean up after testing
+
+**Only after the final presentation.** Before then, keep the stack: deleting it
+deletes every saved discussion.
 
 **CloudFormation → nimbus → Delete.** This removes every resource listed above,
 including the load balancer, the servers, the database (no final snapshot is

@@ -23,7 +23,9 @@ Built for SMU DS600 *Cloud Computing for Economics* (end-term group project).
 > ([evidence](docs/evidence/2026-10-31-scaling/README.md)). Step 12 of the acceptance test (steps 1–11 on Amazon RDS)
 > passed earlier, on 29 Oct with v0.10.0
 > ([evidence](docs/evidence/2026-10-29-step12/README.md)). v0.11.1 fixes the
-> findings of the 31 Oct run and is tested locally. The whole environment (VPC,
+> findings of the 31 Oct run; on 1 Nov it was deployed by updating the stack
+> (a rolling update: one server at a time, about 2 minutes, database untouched;
+> [evidence](docs/evidence/2026-11-01-rolling-update/README.md)). The whole environment (VPC,
 > RDS, load balancer, Auto Scaling group) is created by one CloudFormation
 > template; see [Project status](#project-status).
 
@@ -129,7 +131,7 @@ criteria are from the Lesson 5 slides.
 | 3 | Storage: save analysis | The complete discussion snapshot is saved: in the database (to reopen it) and as a Markdown file in `analyses-data/` (EBS on AWS) | ✅ Working |
 | 4 | Storage: RM notes | Discussion snapshot with **Client ID, tickers, discussion date, stock price at the time, client's interests**, plus notes and follow-up actions | ✅ Working |
 | 5 | Database search | `clients`, `discussions`, `discussion_companies` in SQL; search by client, company (ticker or name) and date; reopen the matching discussion | ✅ Working on Amazon RDS in the Sandbox: instructor's acceptance test step 12 passed on 29 Oct 2026 ([evidence](docs/evidence/2026-10-29-step12/README.md)); SQLite locally |
-| 6 | Scaling | Automatically add and remove capacity: an Application Load Balancer in front of an Auto Scaling group of 1–3 app servers in two Availability Zones, with target tracking on CPU (60%, as in Lab 6) and on requests per server (1,000 a minute); sticky sessions; any server reopens any saved discussion (snapshot in RDS); the sidebar names the server that answered | ✅ Verified on AWS on 31 Oct 2026 (v0.11.0, `ff18611`): a load test raised requests per server to about 6,200 a minute; the alarm scaled 1 → 3 servers, all healthy within 6 minutes; a discussion saved on one server reopened identically on others; after the load, the alarms scaled back to 1; a terminated server was replaced automatically in about 4 minutes ([evidence](docs/evidence/2026-10-31-scaling/README.md)) |
+| 6 | Scaling | Automatically add and remove capacity: an Application Load Balancer in front of an Auto Scaling group of 1–3 app servers in two Availability Zones, with target tracking on CPU (60%, as in Lab 6) and on requests per server (1,000 a minute); sticky sessions; any server reopens any saved discussion (snapshot in RDS); the sidebar names the server that answered | ✅ Verified on AWS on 31 Oct 2026 (v0.11.0, `ff18611`): a load test raised requests per server to about 6,200 a minute; the alarm scaled 1 → 3 servers, all healthy within 6 minutes; a discussion saved on one server reopened identically on others; after the load, the alarms scaled back to 1; a terminated server was replaced automatically in about 4 minutes ([evidence](docs/evidence/2026-10-31-scaling/README.md)). On 1 Nov a code update replaced the server one at a time in about 2 minutes, without touching the database ([evidence](docs/evidence/2026-11-01-rolling-update/README.md)) |
 
 | Marking area | Where to look |
 |---|---|
@@ -471,18 +473,22 @@ In short:
    `InstanceProfileName` empty (no IAM role) and the scaling settings at their defaults.
    **Deleting the stack deletes every saved discussion.** New code is deployed with
    **Update stack** and a new `GitCommit`, which replaces the servers one at a time and
-   keeps RDS (not yet tested on AWS: the 31 Oct test covered scaling, not code updates). See
+   keeps RDS (verified on 1 Nov 2026: one server at a time, about 2 minutes). See
    [Keeping saved discussions](docs/aws-deployment.md#keeping-saved-discussions).
 3. Wait for `CREATE_COMPLETE` (about 20–25 minutes, mostly RDS). It is only reported after
    the first server has connected to RDS and answers its health check.
 4. Open the `NimbusUrl` output: the load balancer, `http://nimbus-alb-….elb.amazonaws.com`.
+   If Chrome warns that the site is not secure (plain HTTP), click **Continue to site**.
+
+**Never delete the stack before the presentation:** the database, and every saved
+discussion, is deleted with it.
 
 | Stage | What it adds | Status |
 |---|---|---|
 | 1 | VPC with public and private subnets, security group, EC2 installed by user data and run as a systemd service | ✅ Deployed in the Sandbox (`CREATE_COMPLETE`, app reachable) |
 | 2 | Amazon RDS for MySQL in the private subnets, reachable only from the app server | ✅ Deployed and verified in the Sandbox (25 and 27 Oct 2026), including a reboot. [Evidence](docs/evidence/2026-10-27-stage2/README.md). The template does not change for v0.10.0: the app creates the new tables on first start |
 | 2b | Instructor's acceptance test step 12: steps 1–11 on Amazon RDS with v0.10.0 | ✅ Passed on 29 Oct 2026, including a reboot. [Evidence](docs/evidence/2026-10-29-step12/README.md); the small defects found are fixed in v0.10.1 |
-| 3 | Automatic scaling (Lesson 9): Application Load Balancer, launch template, Auto Scaling group (1–3 servers, two Availability Zones), target tracking on CPU and requests per server; app servers reachable only through the load balancer | ✅ Verified on AWS 31 Oct 2026 (v0.11.0): scale-out, scale-in and self-healing ([evidence](docs/evidence/2026-10-31-scaling/README.md)). Not yet tested: code update by rolling update |
+| 3 | Automatic scaling (Lesson 9): Application Load Balancer, launch template, Auto Scaling group (1–3 servers, two Availability Zones), target tracking on CPU and requests per server; app servers reachable only through the load balancer | ✅ Verified on AWS 31 Oct 2026 (v0.11.0): scale-out, scale-in and self-healing ([evidence](docs/evidence/2026-10-31-scaling/README.md)). Code update by rolling update verified 1 Nov ([evidence](docs/evidence/2026-11-01-rolling-update/README.md)) |
 
 `scripts/lesson5.yaml` and `scripts/lesson5-nimbus.yaml` are the course's
 Lesson 6–7 templates, kept for reference.
